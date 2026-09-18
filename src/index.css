@@ -1,1 +1,71 @@
 @import "tailwindcss";
+
+@layer base {
+  html {
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+    scroll-behavior: smooth;
+  }
+
+  body {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+/* Hide scrollbar for Chrome, Safari and Opera */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Hide scrollbar for IE, Edge and Firefox */
+.no-scrollbar {
+  -ms-overflow-style: none;  /* IE and Edge */
+  scrollbar-width: none;  /* Firefox */
+}
+
+/* Hide dedicated print-root container during regular screen viewing */
+@media screen {
+  #print-root {
+    display: none !important;
+  }
+}
+
+/* Print mode optimization for physical printers and PDF export */
+@media print {
+  html, body {
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    color: #0f172a !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* When printing is triggered, hide all regular UI components */
+  body.printing > *:not(#print-root),
+  .no-print {
+    display: none !important;
+  }
+
+  /* Exclusively display the document in #print-root */
+  #print-root {
+    display: block !important;
+    position: relative !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    visibility: visible !important;
+  }
+
+  #print-root * {
+    visibility: visible !important;
+  }
+
+  @page {
+    size: auto;
+    margin: 10mm;
+  }
+}
+

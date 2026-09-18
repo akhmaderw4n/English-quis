@@ -22,12 +22,15 @@ import {
   ArrowUpDown,
   GraduationCap,
   PlusCircle,
-  FileSpreadsheet
+  FileSpreadsheet,
+  UserPlus
 } from 'lucide-react';
 import { QuizSubmission } from '../types';
 import { QUIZ_QUESTIONS, QUIZ_METADATA, INITIAL_STUDENT_SUBMISSIONS } from '../data/quizData';
 import { ReviewModal } from './ReviewModal';
+import { TeacherInputStudent } from './TeacherInputStudent';
 import { playClickSound } from '../utils/audio';
+import { executePrintStudentScore, executePrintTeacherRecap, openTeacherRecapInNewTab } from '../utils/printReport';
 
 interface TeacherDashboardProps {
   submissions: QuizSubmission[];
@@ -37,6 +40,8 @@ interface TeacherDashboardProps {
   onSeedSampleData: () => void;
   onDeleteSubmission: (id: string) => void;
   onBackToQuiz: () => void;
+  onAddSubmission: (submission: QuizSubmission) => void;
+  onAddBatchSubmissions: (submissions: QuizSubmission[]) => void;
 }
 
 export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
@@ -47,8 +52,10 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
   onSeedSampleData,
   onDeleteSubmission,
   onBackToQuiz,
+  onAddSubmission,
+  onAddBatchSubmissions,
 }) => {
-  const [activeTab, setActiveTab] = useState<'recap' | 'analysis' | 'bank' | 'settings'>('recap');
+  const [activeTab, setActiveTab] = useState<'recap' | 'input' | 'analysis' | 'bank' | 'settings'>('recap');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedClass, setSelectedClass] = useState<string>('ALL');
   const [sortField, setSortField] = useState<'score' | 'name' | 'time'>('score');
@@ -155,7 +162,11 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
 
   const handlePrint = () => {
     playClickSound();
-    window.print();
+    if (filteredSubmissions.length === 0) {
+      alert('Tidak ada data siswa untuk dicetak pada filter kelas yang dipilih.');
+      return;
+    }
+    executePrintTeacherRecap(filteredSubmissions, selectedClass, stats);
   };
 
   const handleSaveNewPin = (e: React.FormEvent) => {
@@ -171,27 +182,27 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
   };
 
   return (
-    <div className="py-6 sm:py-8 max-w-6xl mx-auto px-4 sm:px-6">
+    <div className="py-4 sm:py-8 max-w-6xl mx-auto px-3.5 sm:px-6">
       {/* Top Banner */}
-      <div className="bg-slate-900 text-white rounded-3xl p-6 sm:p-8 shadow-xl border border-slate-800 mb-8 flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
+      <div className="bg-slate-900 text-white rounded-2xl sm:rounded-3xl p-4.5 sm:p-8 shadow-xl border border-slate-800 mb-6 sm:mb-8 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 sm:gap-6">
         <div>
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/20 text-amber-300 font-bold text-xs border border-amber-500/30 mb-3">
-            <GraduationCap className="w-4 h-4 text-amber-400" />
-            <span>{QUIZ_METADATA.branding}</span>
+          <div className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1 rounded-full bg-amber-500/20 text-amber-300 font-bold text-xs border border-amber-500/30 mb-2 sm:mb-3">
+            <GraduationCap className="w-4 h-4 text-amber-400 shrink-0" />
+            <span className="truncate">{QUIZ_METADATA.branding}</span>
           </div>
-          <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-100">
-            Dashboard Guru: Rekapitulasi &amp; Laporan Penilaian
+          <h1 className="text-xl sm:text-3xl font-extrabold tracking-tight text-slate-100">
+            Dashboard Guru: Rekap &amp; Penilaian
           </h1>
           <p className="text-xs sm:text-sm text-slate-400 mt-1 max-w-2xl">
-            Materi: <strong>Procedure Text (Culinary and Me)</strong> &bull; Buku Siswa <em>English for Nusantara</em> Kelas 7 SMP (Kurikulum Merdeka)
+            Materi: <strong>Procedure Text (Culinary and Me)</strong> &bull; Buku Siswa <em>English for Nusantara</em> Kelas 7 SMP
           </p>
         </div>
 
-        <div className="flex items-center gap-3 w-full md:w-auto justify-end">
+        <div className="flex items-center gap-3 w-full md:w-auto justify-end shrink-0">
           <button
             type="button"
             onClick={onBackToQuiz}
-            className="px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold text-xs sm:text-sm transition-colors cursor-pointer flex items-center gap-1.5 shadow-xs"
+            className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 active:scale-98 text-slate-950 font-bold text-xs sm:text-sm transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-xs"
           >
             <BookOpen className="w-4 h-4" />
             <span>Kembali ke Halaman Kuis</span>
@@ -255,52 +266,85 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
         </div>
       </div>
 
-      {/* Tabs Navigation */}
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 mb-6 pb-2">
-        <div className="flex items-center gap-2">
+      {/* Tabs Navigation (Horizontally scrollable on mobile for sleek touch experience) */}
+      <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3 border-b border-slate-200 mb-5 sm:mb-6 pb-2">
+        <div className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto no-scrollbar pb-1 -mx-3.5 px-3.5 sm:mx-0 sm:px-0">
           <button
             type="button"
-            onClick={() => setActiveTab('recap')}
-            className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition-all cursor-pointer ${
+            onClick={() => {
+              playClickSound();
+              setActiveTab('recap');
+            }}
+            className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-1.5 sm:gap-2 transition-all cursor-pointer shrink-0 whitespace-nowrap ${
               activeTab === 'recap'
                 ? 'bg-amber-500 text-white shadow-xs'
                 : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
             }`}
           >
             <Table className="w-4 h-4" />
-            <span>Rekap Nilai Siswa ({filteredSubmissions.length})</span>
+            <span>Rekap Nilai ({filteredSubmissions.length})</span>
           </button>
 
           <button
             type="button"
-            onClick={() => setActiveTab('analysis')}
-            className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition-all cursor-pointer ${
+            onClick={() => {
+              playClickSound();
+              setActiveTab('input');
+            }}
+            className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-1.5 sm:gap-2 transition-all cursor-pointer shrink-0 whitespace-nowrap ${
+              activeTab === 'input'
+                ? 'bg-amber-500 text-white shadow-xs'
+                : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+            }`}
+          >
+            <UserPlus className="w-4 h-4" />
+            <span>Input Siswa</span>
+            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-black uppercase ${
+              activeTab === 'input' ? 'bg-amber-600 text-white' : 'bg-amber-100 text-amber-900'
+            }`}>
+              Baru
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              playClickSound();
+              setActiveTab('analysis');
+            }}
+            className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-1.5 sm:gap-2 transition-all cursor-pointer shrink-0 whitespace-nowrap ${
               activeTab === 'analysis'
                 ? 'bg-amber-500 text-white shadow-xs'
                 : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
             }`}
           >
             <BarChart3 className="w-4 h-4" />
-            <span>Analisis Butir Soal (10 Soal)</span>
+            <span>Analisis Butir Soal</span>
           </button>
 
           <button
             type="button"
-            onClick={() => setActiveTab('bank')}
-            className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition-all cursor-pointer ${
+            onClick={() => {
+              playClickSound();
+              setActiveTab('bank');
+            }}
+            className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-1.5 sm:gap-2 transition-all cursor-pointer shrink-0 whitespace-nowrap ${
               activeTab === 'bank'
                 ? 'bg-amber-500 text-white shadow-xs'
                 : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
             }`}
           >
             <BookOpen className="w-4 h-4" />
-            <span>Kisi-kisi &amp; Kunci Soal</span>
+            <span>Kisi-kisi &amp; Kunci</span>
           </button>
 
           <button
             type="button"
-            onClick={() => setActiveTab('settings')}
-            className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition-all cursor-pointer ${
+            onClick={() => {
+              playClickSound();
+              setActiveTab('settings');
+            }}
+            className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-1.5 sm:gap-2 transition-all cursor-pointer shrink-0 whitespace-nowrap ${
               activeTab === 'settings'
                 ? 'bg-amber-500 text-white shadow-xs'
                 : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
@@ -312,22 +356,22 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
         </div>
 
         {/* Global actions */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 self-end lg:self-auto shrink-0">
           <button
             type="button"
             onClick={handleExportCSV}
             disabled={submissions.length === 0}
-            className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs flex items-center gap-1.5 transition-colors disabled:opacity-40 disabled:cursor-not-allowed shadow-2xs"
+            className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-semibold text-xs flex items-center gap-1.5 transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-2xs cursor-pointer"
             title="Download file Excel/CSV"
           >
             <FileSpreadsheet className="w-4 h-4" />
-            <span className="hidden sm:inline">Export Excel/CSV</span>
+            <span>Export Excel</span>
           </button>
 
           <button
             type="button"
             onClick={handlePrint}
-            className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-900 text-white font-semibold text-xs flex items-center gap-1.5 transition-colors shadow-2xs"
+            className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-900 active:scale-95 text-white font-semibold text-xs flex items-center gap-1.5 transition-all shadow-2xs cursor-pointer"
             title="Cetak Laporan Penilaian"
           >
             <Printer className="w-4 h-4" />
@@ -396,12 +440,25 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
             <div className="flex items-center gap-2">
               <button
                 type="button"
+                onClick={() => {
+                  playClickSound();
+                  setActiveTab('input');
+                }}
+                className="px-3.5 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold text-xs flex items-center gap-1.5 transition-colors shadow-2xs cursor-pointer"
+                title="Input data siswa baru secara manual atau impor"
+              >
+                <UserPlus className="w-3.5 h-3.5" />
+                <span>+ Input Data Siswa</span>
+              </button>
+
+              <button
+                type="button"
                 onClick={onSeedSampleData}
                 className="px-3 py-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 text-xs font-semibold flex items-center gap-1 transition-colors"
                 title="Muat contoh data peserta dari karakter buku English for Nusantara"
               >
                 <PlusCircle className="w-3.5 h-3.5 text-amber-700" />
-                <span>+ Data Simulasi</span>
+                <span>+ Simulasi</span>
               </button>
 
               {submissions.length > 0 && (
@@ -428,16 +485,29 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                 <Users className="w-10 h-10 text-slate-300 mx-auto mb-3" />
                 <h3 className="font-bold text-slate-700 text-base">Belum Ada Data Siswa</h3>
                 <p className="text-xs text-slate-500 max-w-sm mx-auto mt-1 mb-4">
-                  Siswa yang telah menyelesaikan kuis akan otomatis tercatat di sini, atau Anda dapat memuat data simulasi siswa untuk uji coba.
+                  Siswa yang telah menyelesaikan kuis akan otomatis tercatat di sini, atau Anda dapat menginput nilai siswa secara manual melalui formulir input guru.
                 </p>
-                <button
-                  type="button"
-                  onClick={onSeedSampleData}
-                  className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs transition-colors inline-flex items-center gap-1.5"
-                >
-                  <PlusCircle className="w-4 h-4" />
-                  <span>Muat Data Simulasi Karakter Buku</span>
-                </button>
+                <div className="flex flex-wrap items-center justify-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      playClickSound();
+                      setActiveTab('input');
+                    }}
+                    className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold text-xs transition-colors inline-flex items-center gap-1.5 cursor-pointer shadow-xs"
+                  >
+                    <UserPlus className="w-4 h-4" />
+                    <span>Input Data Siswa Sekarang</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onSeedSampleData}
+                    className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition-colors inline-flex items-center gap-1.5"
+                  >
+                    <PlusCircle className="w-4 h-4" />
+                    <span>Muat Data Simulasi Karakter Buku</span>
+                  </button>
+                </div>
               </div>
             ) : (
               <div className="overflow-x-auto">
@@ -513,6 +583,20 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                             <div className="flex items-center justify-center gap-1.5">
                               <button
                                 type="button"
+                                onClick={() => {
+                                  playClickSound();
+                                  executePrintStudentScore(
+                                    { name: sub.studentName, studentClass: sub.studentClass, studentNumber: sub.studentNumber },
+                                    sub
+                                  );
+                                }}
+                                className="p-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 transition-colors"
+                                title="Cetak Lembar Bukti Nilai Siswa Ini"
+                              >
+                                <Printer className="w-4 h-4" />
+                              </button>
+                              <button
+                                type="button"
                                 onClick={() => setInspectSubmission(sub)}
                                 className="p-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 transition-colors"
                                 title="Lihat Lembar Jawaban Siswa"
@@ -542,6 +626,16 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
             )}
           </div>
         </div>
+      )}
+
+      {/* Tab: INPUT DATA SISWA */}
+      {activeTab === 'input' && (
+        <TeacherInputStudent
+          onAddSubmission={onAddSubmission}
+          onAddBatchSubmissions={onAddBatchSubmissions}
+          onViewRecap={() => setActiveTab('recap')}
+          existingClasses={availableClasses}
+        />
       )}
 
       {/* Tab 2: ANALISIS BUTIR SOAL */}

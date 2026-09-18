@@ -146,23 +146,35 @@ export default function App() {
     setSubmissions(INITIAL_STUDENT_SUBMISSIONS);
   };
 
+  // Add new submission manually by teacher
+  const handleAddSubmission = (newSub: QuizSubmission) => {
+    setSubmissions(prev => [newSub, ...prev]);
+  };
+
+  // Add multiple submissions manually by teacher
+  const handleAddBatchSubmissions = (newSubs: QuizSubmission[]) => {
+    setSubmissions(prev => [...newSubs, ...prev]);
+  };
+
   return (
     <div className="min-h-screen flex flex-col bg-linear-to-b from-amber-50/40 via-white to-orange-50/20 text-slate-800">
       {/* Navigation */}
-      <Navbar
-        currentView={currentView}
-        onNavigate={(view) => {
-          playClickSound();
-          setCurrentView(view);
-        }}
-        onOpenTeacherAuth={() => {
-          playClickSound();
-          setIsTeacherAuthOpen(true);
-        }}
-        soundOn={soundOn}
-        onToggleSound={handleToggleSound}
-        studentName={currentStudent?.name}
-      />
+      <div className="no-print">
+        <Navbar
+          currentView={currentView}
+          onNavigate={(view) => {
+            playClickSound();
+            setCurrentView(view);
+          }}
+          onOpenTeacherAuth={() => {
+            playClickSound();
+            setIsTeacherAuthOpen(true);
+          }}
+          soundOn={soundOn}
+          onToggleSound={handleToggleSound}
+          studentName={currentStudent?.name}
+        />
+      </div>
 
       {/* Main View Area */}
       <main className="flex-1">
@@ -200,6 +212,8 @@ export default function App() {
             onSeedSampleData={handleSeedSampleData}
             onDeleteSubmission={handleDeleteSubmission}
             onBackToQuiz={() => setCurrentView('start')}
+            onAddSubmission={handleAddSubmission}
+            onAddBatchSubmissions={handleAddBatchSubmissions}
           />
         )}
       </main>
@@ -214,7 +228,9 @@ export default function App() {
       )}
 
       {/* Footer with Mandatory Branding */}
-      <Footer />
+      <div className="no-print">
+        <Footer />
+      </div>
     </div>
   );
 }

@@ -71,6 +71,22 @@
         "submittedAt"
       ]
     },
+    "deletedSubmission": {
+      "title": "DeletedSubmission",
+      "description": "Pencatatan ID data siswa yang telah dihapus permanen agar tidak muncul lagi di perangkat lain",
+      "type": "object",
+      "properties": {
+        "deletedId": {
+          "type": "string",
+          "description": "ID data siswa yang dihapus secara permanen"
+        },
+        "deletedAt": {
+          "type": "string",
+          "description": "Waktu penghapusan"
+        }
+      },
+      "required": ["deletedId", "deletedAt"]
+    },
     "appSettings": {
       "title": "AppSettings",
       "description": "Pengaturan bersama aplikasi kuis termasuk PIN guru",
@@ -94,6 +110,10 @@
     "/submissions/{submissionId}": {
       "schema": "submission",
       "description": "Koleksi hasil kuis dan data siswa yang tersimpan di cloud database agar dapat dibuka dan dipantau dari perangkat lain"
+    },
+    "/deletedSubmissions/{submissionId}": {
+      "schema": "deletedSubmission",
+      "description": "Catatan penghapusan permanen agar data tidak di-restore di perangkat lain"
     },
     "/settings/{settingId}": {
       "schema": "appSettings",

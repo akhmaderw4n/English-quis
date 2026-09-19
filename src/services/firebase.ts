@@ -85,41 +85,70 @@ export async function testConnection(): Promise<boolean> {
 }
 
 const SUBMISSIONS_COLLECTION = 'submissions';
+const DELETED_COLLECTION = 'deletedSubmissions';
 const SETTINGS_COLLECTION = 'settings';
 
 /**
- * Real-time subscription to submissions across all devices.
+ * Real-time subscription to submissions across all devices with tombstone filtering.
  */
 export function subscribeToSubmissions(
   onData: (submissions: QuizSubmission[]) => void,
   onError?: (error: Error) => void
 ): () => void {
+  let deletedIds = new Set<string>();
+  let currentSubmissions: QuizSubmission[] = [];
+
+  const emitFiltered = () => {
+    const activeSubmissions = currentSubmissions.filter((s) => !deletedIds.has(s.id));
+    onData(activeSubmissions);
+  };
+
+  // Subscribe to deleted tombstones to ensure deleted submissions never appear
+  const unsubDeleted = onSnapshot(
+    collection(db, DELETED_COLLECTION),
+    (snapshot) => {
+      const ids = new Set<string>();
+      snapshot.forEach((docSnap) => {
+        ids.add(docSnap.id);
+      });
+      deletedIds = ids;
+      emitFiltered();
+    },
+    (err) => {
+      console.warn('Deleted tombstones snapshot warning:', err);
+    }
+  );
+
   const q = query(collection(db, SUBMISSIONS_COLLECTION));
 
-  return onSnapshot(
+  const unsubSubmissions = onSnapshot(
     q,
     (snapshot) => {
       const items: QuizSubmission[] = [];
       snapshot.forEach((docSnap) => {
         const data = docSnap.data();
-        items.push({
-          id: data.id || docSnap.id,
-          studentName: data.studentName || '',
-          studentClass: data.studentClass || '',
-          studentNumber: data.studentNumber || '',
-          score: typeof data.score === 'number' ? data.score : 0,
-          totalQuestions: typeof data.totalQuestions === 'number' ? data.totalQuestions : 10,
-          correctCount: typeof data.correctCount === 'number' ? data.correctCount : 0,
-          wrongCount: typeof data.wrongCount === 'number' ? data.wrongCount : 0,
-          answers: data.answers || {},
-          timeSpentSeconds: typeof data.timeSpentSeconds === 'number' ? data.timeSpentSeconds : 0,
-          submittedAt: data.submittedAt || new Date().toISOString(),
-        });
+        const id = data.id || docSnap.id;
+        if (!deletedIds.has(id)) {
+          items.push({
+            id,
+            studentName: data.studentName || '',
+            studentClass: data.studentClass || '',
+            studentNumber: data.studentNumber || '',
+            score: typeof data.score === 'number' ? data.score : 0,
+            totalQuestions: typeof data.totalQuestions === 'number' ? data.totalQuestions : 10,
+            correctCount: typeof data.correctCount === 'number' ? data.correctCount : 0,
+            wrongCount: typeof data.wrongCount === 'number' ? data.wrongCount : 0,
+            answers: data.answers || {},
+            timeSpentSeconds: typeof data.timeSpentSeconds === 'number' ? data.timeSpentSeconds : 0,
+            submittedAt: data.submittedAt || new Date().toISOString(),
+          });
+        }
       });
 
       // Sort newest first by submission timestamp
       items.sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
-      onData(items);
+      currentSubmissions = items;
+      emitFiltered();
     },
     (err) => {
       console.error('Snapshot error for submissions:', err);
@@ -127,6 +156,11 @@ export function subscribeToSubmissions(
       handleFirestoreError(err, OperationType.LIST, SUBMISSIONS_COLLECTION);
     }
   );
+
+  return () => {
+    unsubDeleted();
+    unsubSubmissions();
+  };
 }
 
 /**
@@ -134,8 +168,10 @@ export function subscribeToSubmissions(
  */
 export async function saveSubmissionToFirebase(submission: QuizSubmission): Promise<void> {
   const docRef = doc(db, SUBMISSIONS_COLLECTION, submission.id);
+  const delRef = doc(db, DELETED_COLLECTION, submission.id);
   try {
-    await setDoc(docRef, {
+    const batch = writeBatch(db);
+    batch.set(docRef, {
       id: submission.id,
       studentName: submission.studentName,
       studentClass: submission.studentClass,
@@ -148,6 +184,9 @@ export async function saveSubmissionToFirebase(submission: QuizSubmission): Prom
       timeSpentSeconds: submission.timeSpentSeconds,
       submittedAt: submission.submittedAt,
     });
+    // Remove from tombstone if re-created
+    batch.delete(delRef);
+    await batch.commit();
   } catch (error) {
     handleFirestoreError(error, OperationType.CREATE, `${SUBMISSIONS_COLLECTION}/${submission.id}`);
   }
@@ -161,6 +200,7 @@ export async function saveBatchSubmissionsToFirebase(submissions: QuizSubmission
     const batch = writeBatch(db);
     submissions.forEach((sub) => {
       const docRef = doc(db, SUBMISSIONS_COLLECTION, sub.id);
+      const delRef = doc(db, DELETED_COLLECTION, sub.id);
       batch.set(docRef, {
         id: sub.id,
         studentName: sub.studentName,
@@ -174,6 +214,8 @@ export async function saveBatchSubmissionsToFirebase(submissions: QuizSubmission
         timeSpentSeconds: sub.timeSpentSeconds,
         submittedAt: sub.submittedAt,
       });
+      // Clear tombstone
+      batch.delete(delRef);
     });
     await batch.commit();
   } catch (error) {
@@ -182,19 +224,28 @@ export async function saveBatchSubmissionsToFirebase(submissions: QuizSubmission
 }
 
 /**
- * Delete a submission from Firestore.
+ * Delete a submission from Firestore PERMANENTLY.
+ * Both deletes the document from submissions AND writes a tombstone in deletedSubmissions
+ * to guarantee it cannot be restored by stale caches on other devices.
  */
 export async function deleteSubmissionFromFirebase(submissionId: string): Promise<void> {
-  const docRef = doc(db, SUBMISSIONS_COLLECTION, submissionId);
+  const subDocRef = doc(db, SUBMISSIONS_COLLECTION, submissionId);
+  const delDocRef = doc(db, DELETED_COLLECTION, submissionId);
   try {
-    await deleteDoc(docRef);
+    const batch = writeBatch(db);
+    batch.delete(subDocRef);
+    batch.set(delDocRef, {
+      deletedId: submissionId,
+      deletedAt: new Date().toISOString(),
+    });
+    await batch.commit();
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, `${SUBMISSIONS_COLLECTION}/${submissionId}`);
   }
 }
 
 /**
- * Clear all submissions in Firestore.
+ * Clear all submissions in Firestore PERMANENTLY across all devices.
  */
 export async function clearAllSubmissionsFromFirebase(): Promise<void> {
   try {
@@ -202,6 +253,11 @@ export async function clearAllSubmissionsFromFirebase(): Promise<void> {
     const batch = writeBatch(db);
     querySnapshot.forEach((docSnap) => {
       batch.delete(docSnap.ref);
+      const delDocRef = doc(db, DELETED_COLLECTION, docSnap.id);
+      batch.set(delDocRef, {
+        deletedId: docSnap.id,
+        deletedAt: new Date().toISOString(),
+      });
     });
     await batch.commit();
   } catch (error) {

@@ -51,6 +51,13 @@ service cloud.firestore {
       allow delete: if isValidId(submissionId);
     }
 
+    // Tombstone of deleted submissions to prevent resurrection on other devices
+    match /deletedSubmissions/{submissionId} {
+      allow read: if true;
+      allow create, update: if isValidId(submissionId);
+      allow delete: if isValidId(submissionId);
+    }
+
     // Shared Settings (e.g. Teacher PIN)
     match /settings/{settingId} {
       allow read: if true;

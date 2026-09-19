@@ -46,17 +46,17 @@ export default function App() {
     }
   });
 
-  // Load submissions with fallback to initial sample data from English for Nusantara characters
+  // Load submissions with fallback to empty array or stored cache
   const [submissions, setSubmissions] = useState<QuizSubmission[]>(() => {
     try {
       const stored = localStorage.getItem(STORAGE_KEY_SUBMISSIONS);
-      if (stored) {
+      if (stored !== null) {
         return JSON.parse(stored);
       }
     } catch (e) {
       console.error('Error loading submissions from localStorage', e);
     }
-    return INITIAL_STUDENT_SUBMISSIONS;
+    return [];
   });
 
   // Subscribe to real-time Firestore Submissions for cross-device sync
@@ -69,27 +69,11 @@ export default function App() {
       (cloudSubmissions) => {
         setIsDbConnected(true);
         setIsSyncing(false);
-        if (cloudSubmissions && cloudSubmissions.length > 0) {
-          setSubmissions(cloudSubmissions);
-          try {
-            localStorage.setItem(STORAGE_KEY_SUBMISSIONS, JSON.stringify(cloudSubmissions));
-          } catch {}
-        } else {
-          // If cloud database is empty on first deployment, seed initial submissions to Firestore
-          const cached = localStorage.getItem(STORAGE_KEY_SUBMISSIONS);
-          let toSeed = INITIAL_STUDENT_SUBMISSIONS;
-          if (cached) {
-            try {
-              const parsed = JSON.parse(cached);
-              if (Array.isArray(parsed) && parsed.length > 0) {
-                toSeed = parsed;
-              }
-            } catch {}
-          }
-          saveBatchSubmissionsToFirebase(toSeed).catch((e) => {
-            console.warn('Initial cloud seed warning:', e);
-          });
-        }
+        // Cloud Firestore is the definitive single source of truth across all devices
+        setSubmissions(cloudSubmissions);
+        try {
+          localStorage.setItem(STORAGE_KEY_SUBMISSIONS, JSON.stringify(cloudSubmissions));
+        } catch {}
       },
       (err) => {
         console.warn('Submissions real-time sync warning:', err);
@@ -209,23 +193,43 @@ export default function App() {
     }
   };
 
-  // Delete individual submission across devices
-  const handleDeleteSubmission = async (id: string) => {
+  // Delete individual submission permanently across devices
+  const handleDeleteSubmission = async (id: string): Promise<void> => {
+    // 1. Optimistically update state
     setSubmissions(prev => prev.filter(s => s.id !== id));
+    // 2. Immediately purge from localStorage
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY_SUBMISSIONS);
+      if (stored) {
+        const parsed: QuizSubmission[] = JSON.parse(stored);
+        const filtered = parsed.filter(s => s.id !== id);
+        localStorage.setItem(STORAGE_KEY_SUBMISSIONS, JSON.stringify(filtered));
+      }
+    } catch (e) {
+      console.warn('LocalStorage purge error:', e);
+    }
+
+    // 3. Delete permanently from Firestore and record tombstone
     try {
       await deleteSubmissionFromFirebase(id);
     } catch (err) {
-      console.error('Error deleting submission from Firebase:', err);
+      console.error('Error permanently deleting submission from Firebase:', err);
+      throw err;
     }
   };
 
-  // Clear all submissions across devices
-  const handleClearSubmissions = async () => {
+  // Clear all submissions permanently across devices
+  const handleClearSubmissions = async (): Promise<void> => {
     setSubmissions([]);
+    try {
+      localStorage.setItem(STORAGE_KEY_SUBMISSIONS, '[]');
+    } catch {}
+
     try {
       await clearAllSubmissionsFromFirebase();
     } catch (err) {
       console.error('Error clearing submissions in Firebase:', err);
+      throw err;
     }
   };
 

@@ -26,7 +26,9 @@ import {
   UserPlus,
   Cloud,
   CloudCheck,
-  CloudOff
+  CloudOff,
+  AlertTriangle,
+  Loader2
 } from 'lucide-react';
 import { QuizSubmission } from '../types';
 import { QUIZ_QUESTIONS, QUIZ_METADATA, INITIAL_STUDENT_SUBMISSIONS } from '../data/quizData';
@@ -39,9 +41,9 @@ interface TeacherDashboardProps {
   submissions: QuizSubmission[];
   currentPin: string;
   onChangePin: (newPin: string) => void;
-  onClearSubmissions: () => void;
+  onClearSubmissions: () => Promise<void> | void;
   onSeedSampleData: () => void;
-  onDeleteSubmission: (id: string) => void;
+  onDeleteSubmission: (id: string) => Promise<void> | void;
   onBackToQuiz: () => void;
   onAddSubmission: (submission: QuizSubmission) => void;
   onAddBatchSubmissions: (submissions: QuizSubmission[]) => void;
@@ -72,6 +74,50 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
   // PIN change state
   const [newPinInput, setNewPinInput] = useState('');
   const [pinChangeMsg, setPinChangeMsg] = useState('');
+
+  // Permanent Delete Modal states
+  const [deleteTarget, setDeleteTarget] = useState<{
+    id: string;
+    studentName: string;
+    studentClass: string;
+    score: number;
+  } | null>(null);
+  const [isClearAllModalOpen, setIsClearAllModalOpen] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteToast, setDeleteToast] = useState<string | null>(null);
+
+  // Handle confirming permanent deletion of single student
+  const handleConfirmDeleteSingle = async () => {
+    if (!deleteTarget) return;
+    setIsDeleting(true);
+    try {
+      await onDeleteSubmission(deleteTarget.id);
+      setDeleteToast(`Data ${deleteTarget.studentName} (${deleteTarget.studentClass}) berhasil dihapus permanen dari semua perangkat.`);
+      setDeleteTarget(null);
+      setTimeout(() => setDeleteToast(null), 4000);
+    } catch (err) {
+      console.error('Gagal menghapus data permanen:', err);
+      alert('Gagal menghapus data dari cloud database. Silakan periksa koneksi dan coba lagi.');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  // Handle confirming permanent clearing of all students
+  const handleConfirmClearAll = async () => {
+    setIsDeleting(true);
+    try {
+      await onClearSubmissions();
+      setDeleteToast('Seluruh rekap data siswa berhasil dikosongkan permanen dari semua perangkat.');
+      setIsClearAllModalOpen(false);
+      setTimeout(() => setDeleteToast(null), 4000);
+    } catch (err) {
+      console.error('Gagal mengosongkan data permanen:', err);
+      alert('Gagal mengosongkan data di cloud database. Silakan periksa koneksi dan coba lagi.');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
 
   // Class list extraction
   const availableClasses = useMemo(() => {
@@ -492,12 +538,11 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                 <button
                   type="button"
                   onClick={() => {
-                    if (confirm('Yakin ingin mereset seluruh data nilai peserta? Tindakan ini tidak dapat dibatalkan.')) {
-                      onClearSubmissions();
-                    }
+                    playClickSound();
+                    setIsClearAllModalOpen(true);
                   }}
-                  className="p-1.5 rounded-lg text-rose-600 hover:bg-rose-50 border border-rose-200 text-xs transition-colors"
-                  title="Kosongkan Semua Data"
+                  className="p-1.5 rounded-lg text-rose-600 hover:bg-rose-50 border border-rose-200 text-xs transition-colors cursor-pointer"
+                  title="Kosongkan Semua Data Nilai Secara Permanen"
                 >
                   <Trash2 className="w-4 h-4" />
                 </button>
@@ -633,12 +678,16 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                               <button
                                 type="button"
                                 onClick={() => {
-                                  if (confirm(`Hapus data nilai siswa ${sub.studentName}?`)) {
-                                    onDeleteSubmission(sub.id);
-                                  }
+                                  playClickSound();
+                                  setDeleteTarget({
+                                    id: sub.id,
+                                    studentName: sub.studentName,
+                                    studentClass: sub.studentClass,
+                                    score: sub.score,
+                                  });
                                 }}
-                                className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
-                                title="Hapus Data Ini"
+                                className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                                title="Hapus Permanen Data Siswa Ini"
                               >
                                 <Trash2 className="w-4 h-4" />
                               </button>
@@ -841,15 +890,13 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                 type="button"
                 onClick={() => {
                   playClickSound();
-                  if (confirm('Yakin ingin mengosongkan semua rekap data siswa di database cloud?')) {
-                    onClearSubmissions();
-                  }
+                  setIsClearAllModalOpen(true);
                 }}
                 className="px-3.5 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 active:bg-rose-200 border border-rose-200 text-rose-800 font-semibold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
-                title="Hapus semua data siswa"
+                title="Hapus semua data siswa secara permanen dari database cloud"
               >
                 <Trash2 className="w-3.5 h-3.5 text-rose-600" />
-                <span>Kosongkan Semua Data</span>
+                <span>Kosongkan Semua Data Permanen</span>
               </button>
             </div>
           </div>
@@ -915,6 +962,155 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
           onClose={() => setInspectSubmission(null)}
         />
       )}
+
+      {/* Modal 1: Hapus Permanen Data Siswa Tunggal */}
+      <AnimatePresence>
+        {deleteTarget && (
+          <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200"
+            >
+              <div className="w-12 h-12 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center mb-4">
+                <Trash2 className="w-6 h-6" />
+              </div>
+
+              <h3 className="text-lg font-bold text-slate-900 mb-1">
+                Hapus Nilai Siswa Secara Permanen?
+              </h3>
+              <p className="text-xs text-slate-600 leading-relaxed mb-4">
+                Data nilai peserta didik <strong className="text-slate-900">{deleteTarget.studentName}</strong> (Kelas {deleteTarget.studentClass} - Nilai {deleteTarget.score}) akan dihapus secara permanen dari server Cloud Firestore.
+              </p>
+
+              <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl mb-5 flex items-start gap-2.5 text-xs text-rose-800">
+                <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                <span>
+                  <strong>Perhatian:</strong> Data ini akan langsung terhapus permanen dan <strong>tidak akan muncul lagi</strong> di laptop guru, HP pengawas, maupun perangkat lain.
+                </span>
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5">
+                <button
+                  type="button"
+                  disabled={isDeleting}
+                  onClick={() => {
+                    playClickSound();
+                    setDeleteTarget(null);
+                  }}
+                  className="px-4 py-2.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-100 transition-colors disabled:opacity-50 cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  disabled={isDeleting}
+                  onClick={() => {
+                    playClickSound();
+                    handleConfirmDeleteSingle();
+                  }}
+                  className="px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-xs font-bold text-white shadow-sm flex items-center gap-2 transition-colors disabled:opacity-50 cursor-pointer"
+                >
+                  {isDeleting ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Menghapus dari Cloud...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 className="w-4 h-4" />
+                      <span>Ya, Hapus Permanen</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Modal 2: Kosongkan Seluruh Data Nilai Permanen */}
+      <AnimatePresence>
+        {isClearAllModalOpen && (
+          <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200"
+            >
+              <div className="w-12 h-12 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center mb-4">
+                <AlertTriangle className="w-6 h-6" />
+              </div>
+
+              <h3 className="text-lg font-bold text-slate-900 mb-1">
+                Kosongkan Semua Rekap Nilai Siswa?
+              </h3>
+              <p className="text-xs text-slate-600 leading-relaxed mb-4">
+                Seluruh <strong>{submissions.length} data nilai siswa</strong> akan dihapus permanen dari server Cloud Firestore.
+              </p>
+
+              <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl mb-5 flex items-start gap-2.5 text-xs text-rose-800">
+                <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                <span>
+                  <strong>Perhatian:</strong> Semua perangkat yang terhubung ke database online ini akan langsung disinkronkan menjadi kosong dan data yang dihapus tidak dapat dipulihkan kembali.
+                </span>
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5">
+                <button
+                  type="button"
+                  disabled={isDeleting}
+                  onClick={() => {
+                    playClickSound();
+                    setIsClearAllModalOpen(false);
+                  }}
+                  className="px-4 py-2.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-100 transition-colors disabled:opacity-50 cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  disabled={isDeleting}
+                  onClick={() => {
+                    playClickSound();
+                    handleConfirmClearAll();
+                  }}
+                  className="px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-xs font-bold text-white shadow-sm flex items-center gap-2 transition-colors disabled:opacity-50 cursor-pointer"
+                >
+                  {isDeleting ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Mengosongkan Database...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 className="w-4 h-4" />
+                      <span>Ya, Kosongkan Permanen</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Floating Success Toast */}
+      <AnimatePresence>
+        {deleteToast && (
+          <motion.div
+            initial={{ opacity: 0, y: 30, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 30, scale: 0.95 }}
+            className="fixed bottom-6 right-6 z-50 bg-slate-900 text-white px-4 py-3 rounded-xl shadow-2xl border border-slate-700 flex items-center gap-2.5 text-xs font-semibold max-w-md"
+          >
+            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+            <span>{deleteToast}</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };

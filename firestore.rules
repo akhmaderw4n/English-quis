@@ -1,0 +1,61 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidSubmission(data) {
+      return data.keys().hasAll([
+        'id', 'studentName', 'studentClass', 'studentNumber',
+        'score', 'totalQuestions', 'correctCount', 'wrongCount',
+        'answers', 'timeSpentSeconds', 'submittedAt'
+      ]) &&
+      data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+      data.studentName is string && data.studentName.size() > 0 && data.studentName.size() <= 120 &&
+      data.studentClass is string && data.studentClass.size() > 0 && data.studentClass.size() <= 30 &&
+      data.studentNumber is string && data.studentNumber.size() > 0 && data.studentNumber.size() <= 15 &&
+      data.score is number && data.score >= 0 && data.score <= 100 &&
+      data.totalQuestions is number && data.totalQuestions >= 0 && data.totalQuestions <= 100 &&
+      data.correctCount is number && data.correctCount >= 0 && data.correctCount <= 100 &&
+      data.wrongCount is number && data.wrongCount >= 0 && data.wrongCount <= 100 &&
+      data.timeSpentSeconds is number && data.timeSpentSeconds >= 0 &&
+      data.submittedAt is string && data.submittedAt.size() <= 50;
+    }
+
+    function isValidSettings(data) {
+      return data.keys().hasAll(['teacherPin']) &&
+      data.teacherPin is string && data.teacherPin.size() >= 4 && data.teacherPin.size() <= 20;
+    }
+
+    // Default deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Submissions collection - synchronized across all devices
+    match /submissions/{submissionId} {
+      allow read: if true;
+      allow create: if isValidId(submissionId) && isValidSubmission(incoming());
+      allow update: if isValidId(submissionId) && isValidSubmission(incoming());
+      allow delete: if isValidId(submissionId);
+    }
+
+    // Shared Settings (e.g. Teacher PIN)
+    match /settings/{settingId} {
+      allow read: if true;
+      allow create, update: if isValidId(settingId) && isValidSettings(incoming());
+      allow delete: if false;
+    }
+  }
+}

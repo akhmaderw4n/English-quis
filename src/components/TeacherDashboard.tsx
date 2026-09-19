@@ -23,7 +23,10 @@ import {
   GraduationCap,
   PlusCircle,
   FileSpreadsheet,
-  UserPlus
+  UserPlus,
+  Cloud,
+  CloudCheck,
+  CloudOff
 } from 'lucide-react';
 import { QuizSubmission } from '../types';
 import { QUIZ_QUESTIONS, QUIZ_METADATA, INITIAL_STUDENT_SUBMISSIONS } from '../data/quizData';
@@ -42,6 +45,8 @@ interface TeacherDashboardProps {
   onBackToQuiz: () => void;
   onAddSubmission: (submission: QuizSubmission) => void;
   onAddBatchSubmissions: (submissions: QuizSubmission[]) => void;
+  isDbConnected?: boolean;
+  isSyncing?: boolean;
 }
 
 export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
@@ -54,6 +59,8 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
   onBackToQuiz,
   onAddSubmission,
   onAddBatchSubmissions,
+  isDbConnected = true,
+  isSyncing = false,
 }) => {
   const [activeTab, setActiveTab] = useState<'recap' | 'input' | 'analysis' | 'bank' | 'settings'>('recap');
   const [searchQuery, setSearchQuery] = useState('');
@@ -186,9 +193,29 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
       {/* Top Banner */}
       <div className="bg-slate-900 text-white rounded-2xl sm:rounded-3xl p-4.5 sm:p-8 shadow-xl border border-slate-800 mb-6 sm:mb-8 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 sm:gap-6">
         <div>
-          <div className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1 rounded-full bg-amber-500/20 text-amber-300 font-bold text-xs border border-amber-500/30 mb-2 sm:mb-3">
-            <GraduationCap className="w-4 h-4 text-amber-400 shrink-0" />
-            <span className="truncate">{QUIZ_METADATA.branding}</span>
+          <div className="flex flex-wrap items-center gap-2 mb-2 sm:mb-3">
+            <div className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1 rounded-full bg-amber-500/20 text-amber-300 font-bold text-xs border border-amber-500/30">
+              <GraduationCap className="w-4 h-4 text-amber-400 shrink-0" />
+              <span className="truncate">{QUIZ_METADATA.branding}</span>
+            </div>
+            <div className={`inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1 rounded-full text-xs font-semibold border ${
+              isDbConnected 
+                ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' 
+                : 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+            }`}>
+              {isDbConnected ? (
+                <>
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                  <Cloud className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  <span>Cloud Database: Sinkron Lintas Perangkat</span>
+                </>
+              ) : (
+                <>
+                  <CloudOff className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                  <span>Menghubungkan Database Cloud...</span>
+                </>
+              )}
+            </div>
           </div>
           <h1 className="text-xl sm:text-3xl font-extrabold tracking-tight text-slate-100">
             Dashboard Guru: Rekap &amp; Penilaian
@@ -764,53 +791,118 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
         </div>
       )}
 
-      {/* Tab 4: PENGATURAN PIN */}
+      {/* Tab 4: PENGATURAN PIN & DATABASE CLOUD */}
       {activeTab === 'settings' && (
-        <div className="bg-white p-6 rounded-2xl border border-slate-200 max-w-lg shadow-2xs">
-          <div className="flex items-center gap-2 mb-4 pb-3 border-b border-slate-100">
-            <KeyRound className="w-5 h-5 text-amber-600" />
-            <div>
-              <h3 className="font-bold text-slate-900 text-base">Ubah PIN Akses Dashboard</h3>
-              <p className="text-xs text-slate-500">Ganti PIN default untuk mengamankan data rekap nilai</p>
-            </div>
-          </div>
-
-          <form onSubmit={handleSaveNewPin} className="space-y-4">
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">
-                PIN Saat Ini:
-              </label>
-              <div className="p-2.5 rounded-xl bg-slate-100 text-slate-800 font-mono text-sm font-bold border border-slate-200">
-                {currentPin}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 max-w-4xl">
+          {/* Card 1: Cloud Database Status */}
+          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-2xs space-y-4">
+            <div className="flex items-center gap-2 pb-3 border-b border-slate-100">
+              <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center">
+                <Cloud className="w-4 h-4" />
+              </div>
+              <div>
+                <h3 className="font-bold text-slate-900 text-base">Sinkronisasi Database Cloud</h3>
+                <p className="text-xs text-slate-500">Firebase Firestore Lintas Perangkat</p>
               </div>
             </div>
 
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">
-                Masukkan PIN Baru (Minimal 4 Angka/Karakter):
-              </label>
-              <input
-                type="text"
-                value={newPinInput}
-                onChange={(e) => setNewPinInput(e.target.value)}
-                placeholder="Contoh: 7788 atau 2026"
-                className="w-full p-2.5 rounded-xl border border-slate-300 text-sm font-mono focus:border-amber-500 focus:ring-1 focus:ring-amber-200 outline-hidden"
-              />
+            <div className="p-3.5 rounded-xl bg-emerald-50/70 border border-emerald-200 text-xs space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-slate-700">Status Koneksi:</span>
+                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-200/80 text-emerald-900 font-bold text-[11px]">
+                  <span className="w-2 h-2 rounded-full bg-emerald-600 animate-pulse"></span>
+                  {isDbConnected ? 'Tersambung Real-time' : 'Menghubungkan...'}
+                </span>
+              </div>
+              <div className="flex items-center justify-between text-slate-600">
+                <span>Total Data Tersimpan:</span>
+                <span className="font-bold text-slate-900">{submissions.length} Nilai Siswa</span>
+              </div>
+              <p className="text-[11px] text-emerald-800 leading-relaxed pt-1 border-t border-emerald-200/60">
+                Data siswa yang menyelesaikan kuis otomatis tersimpan di cloud database sehingga dapat langsung dipantau dari laptop guru, HP pengawas, maupun proyektor sekolah tanpa perlu transfer manual.
+              </p>
             </div>
 
-            {pinChangeMsg && (
-              <p className="text-xs font-semibold text-emerald-700 bg-emerald-50 p-2.5 rounded-lg border border-emerald-200">
-                {pinChangeMsg}
-              </p>
-            )}
+            <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  playClickSound();
+                  onSeedSampleData();
+                }}
+                className="px-3.5 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 active:bg-amber-200 border border-amber-300 text-amber-900 font-semibold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+                title="Muat data contoh siswa ke database cloud"
+              >
+                <RefreshCw className="w-3.5 h-3.5 text-amber-700" />
+                <span>Muat Data Contoh ke Cloud</span>
+              </button>
 
-            <button
-              type="submit"
-              className="px-5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs transition-colors"
-            >
-              Simpan PIN Baru
-            </button>
-          </form>
+              <button
+                type="button"
+                onClick={() => {
+                  playClickSound();
+                  if (confirm('Yakin ingin mengosongkan semua rekap data siswa di database cloud?')) {
+                    onClearSubmissions();
+                  }
+                }}
+                className="px-3.5 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 active:bg-rose-200 border border-rose-200 text-rose-800 font-semibold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+                title="Hapus semua data siswa"
+              >
+                <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                <span>Kosongkan Semua Data</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Card 2: Pengaturan PIN Guru */}
+          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-2xs">
+            <div className="flex items-center gap-2 mb-4 pb-3 border-b border-slate-100">
+              <div className="w-8 h-8 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center">
+                <KeyRound className="w-4 h-4" />
+              </div>
+              <div>
+                <h3 className="font-bold text-slate-900 text-base">Ubah PIN Akses Dashboard</h3>
+                <p className="text-xs text-slate-500">PIN tersinkronisasi otomatis ke semua perangkat</p>
+              </div>
+            </div>
+
+            <form onSubmit={handleSaveNewPin} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  PIN Saat Ini:
+                </label>
+                <div className="p-2.5 rounded-xl bg-slate-100 text-slate-800 font-mono text-sm font-bold border border-slate-200">
+                  {currentPin}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Masukkan PIN Baru (Minimal 4 Angka/Karakter):
+                </label>
+                <input
+                  type="text"
+                  value={newPinInput}
+                  onChange={(e) => setNewPinInput(e.target.value)}
+                  placeholder="Contoh: 7788 atau 2026"
+                  className="w-full p-2.5 rounded-xl border border-slate-300 text-sm font-mono focus:border-amber-500 focus:ring-1 focus:ring-amber-200 outline-hidden"
+                />
+              </div>
+
+              {pinChangeMsg && (
+                <p className="text-xs font-semibold text-emerald-700 bg-emerald-50 p-2.5 rounded-lg border border-emerald-200">
+                  {pinChangeMsg}
+                </p>
+              )}
+
+              <button
+                type="submit"
+                className="px-5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs transition-colors cursor-pointer"
+              >
+                Simpan PIN Baru
+              </button>
+            </form>
+          </div>
         </div>
       )}
 

@@ -1,0 +1,103 @@
+{
+  "entities": {
+    "submission": {
+      "title": "QuizSubmission",
+      "description": "Hasil kuis pembelajaran siswa yang tersinkronisasi lintas perangkat",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "ID unik dokumen kuis siswa",
+          "maxLength": 128
+        },
+        "studentName": {
+          "type": "string",
+          "description": "Nama lengkap peserta didik",
+          "maxLength": 120,
+          "minLength": 1
+        },
+        "studentClass": {
+          "type": "string",
+          "description": "Kelas peserta didik (e.g. 7A, 7B, dll)",
+          "maxLength": 30,
+          "minLength": 1
+        },
+        "studentNumber": {
+          "type": "string",
+          "description": "Nomor absen peserta didik",
+          "maxLength": 15,
+          "minLength": 1
+        },
+        "score": {
+          "type": "number",
+          "description": "Nilai akhir kuis (0 - 100)"
+        },
+        "totalQuestions": {
+          "type": "number",
+          "description": "Total soal pada kuis"
+        },
+        "correctCount": {
+          "type": "number",
+          "description": "Jumlah jawaban yang benar"
+        },
+        "wrongCount": {
+          "type": "number",
+          "description": "Jumlah jawaban yang salah"
+        },
+        "answers": {
+          "type": "object",
+          "description": "Peta jawaban siswa per nomor butir soal"
+        },
+        "timeSpentSeconds": {
+          "type": "number",
+          "description": "Total durasi pengerjaan kuis dalam detik"
+        },
+        "submittedAt": {
+          "type": "string",
+          "description": "Stempel waktu pengiriman kuis format ISO"
+        }
+      },
+      "required": [
+        "id",
+        "studentName",
+        "studentClass",
+        "studentNumber",
+        "score",
+        "totalQuestions",
+        "correctCount",
+        "wrongCount",
+        "answers",
+        "timeSpentSeconds",
+        "submittedAt"
+      ]
+    },
+    "appSettings": {
+      "title": "AppSettings",
+      "description": "Pengaturan bersama aplikasi kuis termasuk PIN guru",
+      "type": "object",
+      "properties": {
+        "teacherPin": {
+          "type": "string",
+          "description": "Kode PIN akses ruang guru",
+          "maxLength": 20,
+          "minLength": 4
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Waktu pembaruan PIN terakhir"
+        }
+      },
+      "required": ["teacherPin"]
+    }
+  },
+  "firestore": {
+    "/submissions/{submissionId}": {
+      "schema": "submission",
+      "description": "Koleksi hasil kuis dan data siswa yang tersimpan di cloud database agar dapat dibuka dan dipantau dari perangkat lain"
+    },
+    "/settings/{settingId}": {
+      "schema": "appSettings",
+      "description": "Dokumen pengaturan aplikasi seperti PIN guru yang tersinkronisasi lintas perangkat"
+    }
+  }
+}

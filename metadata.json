@@ -1,6 +1,6 @@
 {
   "name": "English Quiz - Procedure Text (Culinary and Me)",
-  "description": "Aplikasi kuis interaktif Bahasa Inggris materi Procedure Text dari bab Culinary and Me buku English for Nusantara Kelas 7 SMP oleh Eli Ermawati, S.Pd., dilengkapi fitur Dashboard Guru dan rekap nilai.",
+  "description": "Aplikasi kuis interaktif Bahasa Inggris materi Procedure Text (Culinary and Me) Buku English for Nusantara Kelas 7 SMP dengan database online Firebase Firestore untuk sinkronisasi data dan nilai siswa otomatis lintas perangkat.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

@@ -1,5 +1,5 @@
 import React from 'react';
-import { BookOpen, ShieldCheck, Volume2, VolumeX, Award } from 'lucide-react';
+import { BookOpen, ShieldCheck, Volume2, VolumeX, Award, Cloud, CloudOff } from 'lucide-react';
 import { QUIZ_METADATA } from '../data/quizData';
 import { ViewState } from '../types';
 
@@ -10,6 +10,7 @@ interface NavbarProps {
   soundOn: boolean;
   onToggleSound: () => void;
   studentName?: string;
+  isDbConnected?: boolean;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -19,6 +20,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   soundOn,
   onToggleSound,
   studentName,
+  isDbConnected = true,
 }) => {
   return (
     <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-amber-200/80 shadow-xs">
@@ -50,6 +52,32 @@ export const Navbar: React.FC<NavbarProps> = ({
 
         {/* Right Controls */}
         <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
+          {/* Cloud Database Sync Status */}
+          <div 
+            className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold border transition-all ${
+              isDbConnected 
+                ? 'bg-emerald-50 text-emerald-800 border-emerald-200' 
+                : 'bg-amber-50 text-amber-800 border-amber-200'
+            }`}
+            title={isDbConnected ? 'Terkoneksi ke Database Cloud (Data muncul otomatis di perangkat lain)' : 'Menghubungkan ke Database Cloud...'}
+          >
+            {isDbConnected ? (
+              <>
+                <Cloud className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                <span className="flex h-1.5 w-1.5 relative">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500"></span>
+                </span>
+                <span className="hidden md:inline">Database Online</span>
+              </>
+            ) : (
+              <>
+                <CloudOff className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                <span className="hidden md:inline">Menghubungkan...</span>
+              </>
+            )}
+          </div>
+
           {/* Sound Toggle */}
           <button
             onClick={onToggleSound}

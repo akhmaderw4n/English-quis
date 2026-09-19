@@ -14,6 +14,16 @@ import { ResultScreen } from './components/ResultScreen';
 import { TeacherDashboard } from './components/TeacherDashboard';
 import { TeacherPinModal } from './components/TeacherPinModal';
 import { isSoundEnabled, setSoundEnabled, playClickSound } from './utils/audio';
+import {
+  subscribeToSubmissions,
+  saveSubmissionToFirebase,
+  saveBatchSubmissionsToFirebase,
+  deleteSubmissionFromFirebase,
+  clearAllSubmissionsFromFirebase,
+  subscribeToTeacherPin,
+  saveTeacherPinToFirebase,
+  testConnection
+} from './services/firebase';
 
 const STORAGE_KEY_SUBMISSIONS = 'en_nusantara_quiz_submissions_v1';
 const STORAGE_KEY_PIN = 'en_nusantara_teacher_pin_v1';
@@ -24,6 +34,8 @@ export default function App() {
   const [latestSubmission, setLatestSubmission] = useState<QuizSubmission | null>(null);
   const [isTeacherAuthOpen, setIsTeacherAuthOpen] = useState(false);
   const [soundOn, setSoundOn] = useState(true);
+  const [isDbConnected, setIsDbConnected] = useState(true);
+  const [isSyncing, setIsSyncing] = useState(true);
 
   // Load teacher PIN with fallback to default "1234"
   const [teacherPin, setTeacherPin] = useState<string>(() => {
@@ -47,7 +59,60 @@ export default function App() {
     return INITIAL_STUDENT_SUBMISSIONS;
   });
 
-  // Persist submissions
+  // Subscribe to real-time Firestore Submissions for cross-device sync
+  useEffect(() => {
+    testConnection().then((connected) => {
+      setIsDbConnected(connected);
+    });
+
+    const unsubscribeSubmissions = subscribeToSubmissions(
+      (cloudSubmissions) => {
+        setIsDbConnected(true);
+        setIsSyncing(false);
+        if (cloudSubmissions && cloudSubmissions.length > 0) {
+          setSubmissions(cloudSubmissions);
+          try {
+            localStorage.setItem(STORAGE_KEY_SUBMISSIONS, JSON.stringify(cloudSubmissions));
+          } catch {}
+        } else {
+          // If cloud database is empty on first deployment, seed initial submissions to Firestore
+          const cached = localStorage.getItem(STORAGE_KEY_SUBMISSIONS);
+          let toSeed = INITIAL_STUDENT_SUBMISSIONS;
+          if (cached) {
+            try {
+              const parsed = JSON.parse(cached);
+              if (Array.isArray(parsed) && parsed.length > 0) {
+                toSeed = parsed;
+              }
+            } catch {}
+          }
+          saveBatchSubmissionsToFirebase(toSeed).catch((e) => {
+            console.warn('Initial cloud seed warning:', e);
+          });
+        }
+      },
+      (err) => {
+        console.warn('Submissions real-time sync warning:', err);
+        setIsSyncing(false);
+      }
+    );
+
+    const unsubscribePin = subscribeToTeacherPin((cloudPin) => {
+      if (cloudPin) {
+        setTeacherPin(cloudPin);
+        try {
+          localStorage.setItem(STORAGE_KEY_PIN, cloudPin);
+        } catch {}
+      }
+    }, QUIZ_METADATA.defaultTeacherPin);
+
+    return () => {
+      unsubscribeSubmissions();
+      unsubscribePin();
+    };
+  }, []);
+
+  // Persist backup to localStorage
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEY_SUBMISSIONS, JSON.stringify(submissions));
@@ -56,7 +121,7 @@ export default function App() {
     }
   }, [submissions]);
 
-  // Persist PIN
+  // Persist backup PIN to localStorage
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEY_PIN, teacherPin);
@@ -78,8 +143,8 @@ export default function App() {
     setCurrentView('quiz');
   };
 
-  // Finish Quiz & Record Submission
-  const handleFinishQuiz = (answers: Record<number, 'A' | 'B' | 'C' | 'D'>, timeSpentSeconds: number) => {
+  // Finish Quiz & Record Submission to Cloud Database
+  const handleFinishQuiz = async (answers: Record<number, 'A' | 'B' | 'C' | 'D'>, timeSpentSeconds: number) => {
     if (!currentStudent) return;
 
     let correctCount = 0;
@@ -106,9 +171,17 @@ export default function App() {
       submittedAt: new Date().toISOString(),
     };
 
-    setSubmissions(prev => [newSubmission, ...prev]);
+    // Optimistically update local view
+    setSubmissions(prev => [newSubmission, ...prev.filter(s => s.id !== newSubmission.id)]);
     setLatestSubmission(newSubmission);
     setCurrentView('result');
+
+    // Persist to Firebase Firestore for cross-device sync
+    try {
+      await saveSubmissionToFirebase(newSubmission);
+    } catch (err) {
+      console.error('Error saving submission to Firebase:', err);
+    }
   };
 
   // Retake Quiz
@@ -126,34 +199,64 @@ export default function App() {
     setCurrentView('dashboard');
   };
 
-  // Change PIN
-  const handleChangePin = (newPin: string) => {
+  // Change PIN across devices
+  const handleChangePin = async (newPin: string) => {
     setTeacherPin(newPin);
+    try {
+      await saveTeacherPinToFirebase(newPin);
+    } catch (err) {
+      console.error('Error saving PIN to Firebase:', err);
+    }
   };
 
-  // Delete individual submission
-  const handleDeleteSubmission = (id: string) => {
+  // Delete individual submission across devices
+  const handleDeleteSubmission = async (id: string) => {
     setSubmissions(prev => prev.filter(s => s.id !== id));
+    try {
+      await deleteSubmissionFromFirebase(id);
+    } catch (err) {
+      console.error('Error deleting submission from Firebase:', err);
+    }
   };
 
-  // Clear all submissions
-  const handleClearSubmissions = () => {
+  // Clear all submissions across devices
+  const handleClearSubmissions = async () => {
     setSubmissions([]);
+    try {
+      await clearAllSubmissionsFromFirebase();
+    } catch (err) {
+      console.error('Error clearing submissions in Firebase:', err);
+    }
   };
 
-  // Re-seed sample data
-  const handleSeedSampleData = () => {
+  // Re-seed sample data to cloud database
+  const handleSeedSampleData = async () => {
     setSubmissions(INITIAL_STUDENT_SUBMISSIONS);
+    try {
+      await saveBatchSubmissionsToFirebase(INITIAL_STUDENT_SUBMISSIONS);
+    } catch (err) {
+      console.error('Error seeding data to Firebase:', err);
+    }
   };
 
   // Add new submission manually by teacher
-  const handleAddSubmission = (newSub: QuizSubmission) => {
-    setSubmissions(prev => [newSub, ...prev]);
+  const handleAddSubmission = async (newSub: QuizSubmission) => {
+    setSubmissions(prev => [newSub, ...prev.filter(s => s.id !== newSub.id)]);
+    try {
+      await saveSubmissionToFirebase(newSub);
+    } catch (err) {
+      console.error('Error adding submission to Firebase:', err);
+    }
   };
 
   // Add multiple submissions manually by teacher
-  const handleAddBatchSubmissions = (newSubs: QuizSubmission[]) => {
+  const handleAddBatchSubmissions = async (newSubs: QuizSubmission[]) => {
     setSubmissions(prev => [...newSubs, ...prev]);
+    try {
+      await saveBatchSubmissionsToFirebase(newSubs);
+    } catch (err) {
+      console.error('Error adding batch submissions to Firebase:', err);
+    }
   };
 
   return (
@@ -173,6 +276,7 @@ export default function App() {
           soundOn={soundOn}
           onToggleSound={handleToggleSound}
           studentName={currentStudent?.name}
+          isDbConnected={isDbConnected}
         />
       </div>
 
@@ -214,6 +318,8 @@ export default function App() {
             onBackToQuiz={() => setCurrentView('start')}
             onAddSubmission={handleAddSubmission}
             onAddBatchSubmissions={handleAddBatchSubmissions}
+            isDbConnected={isDbConnected}
+            isSyncing={isSyncing}
           />
         )}
       </main>

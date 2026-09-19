@@ -46,7 +46,7 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
 
   // Audio Playback states for listening questions
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
-  const [speechRate, setSpeechRate] = useState<number>(0.92);
+  const [speechRate, setSpeechRate] = useState<number>(0.80);
   const [autoPlayAudio, setAutoPlayAudio] = useState<boolean>(true);
 
   // Timer
@@ -81,7 +81,7 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
 
       return () => clearTimeout(timer);
     }
-  }, [currentIndex, autoPlayAudio, soundOn, speechRate]);
+  }, [currentIndex, autoPlayAudio, soundOn]);
 
   // Clean up speech when unmounting
   useEffect(() => {
@@ -89,6 +89,24 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
       stopSpeech();
     };
   }, []);
+
+  const handleSetSpeechRate = (newRate: number) => {
+    playClickSound();
+    setSpeechRate(newRate);
+    if (isPlayingAudio) {
+      stopSpeech();
+      setTimeout(() => {
+        const textToSpeak = currentQuestion.audioScript || currentQuestion.question;
+        setIsPlayingAudio(true);
+        speakEnglish(textToSpeak, {
+          rate: newRate,
+          onStart: () => setIsPlayingAudio(true),
+          onEnd: () => setIsPlayingAudio(false),
+          onError: () => setIsPlayingAudio(false),
+        });
+      }, 120);
+    }
+  };
 
   const handleTogglePlayAudio = (overrideText?: string) => {
     playClickSound();
@@ -367,19 +385,32 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
               </div>
 
               {/* Controls: Speed & Auto-Play Switch */}
-              <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-                {/* Speed toggle */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    playClickSound();
-                    setSpeechRate(prev => prev === 0.92 ? 0.75 : prev === 0.75 ? 1.1 : 0.92);
-                  }}
-                  className="px-2.5 py-1 rounded-lg bg-white border border-amber-300 text-[11px] font-bold text-amber-900 shadow-2xs hover:bg-amber-50 transition-colors cursor-pointer"
-                  title="Atur kecepatan audio (0.75x Lambat, 1.0x Normal, 1.1x Cepat)"
-                >
-                  ⚡ {speechRate === 0.75 ? '0.75x (Lambat)' : speechRate === 1.1 ? '1.1x (Cepat)' : '1.0x (Normal)'}
-                </button>
+              <div className="flex items-center flex-wrap gap-1.5 sm:gap-2 shrink-0">
+                {/* Speed Segmented Selector */}
+                <div className="flex items-center bg-white border border-amber-300/90 rounded-xl p-0.5 shadow-2xs">
+                  <span className="text-[10px] font-bold text-amber-900 px-1.5 sm:px-2 hidden sm:inline">
+                    Tempo:
+                  </span>
+                  {[
+                    { rate: 0.75, label: '0.75x Pelan', title: '0.75x (Perlahan & Sangat Jelas - Cocok untuk menyimak kata demi kata)' },
+                    { rate: 0.80, label: '0.80x Jelas ★', title: '0.80x (Jelas & Teratur - Rekomendasi Standar SMP Kelas 7)' },
+                    { rate: 0.90, label: '0.90x Normal', title: '0.90x (Kecepatan Percakapan Normal)' },
+                  ].map(opt => (
+                    <button
+                      key={opt.rate}
+                      type="button"
+                      onClick={() => handleSetSpeechRate(opt.rate)}
+                      className={`px-2 sm:px-2.5 py-1 rounded-lg text-[10.5px] sm:text-[11px] font-bold transition-all cursor-pointer whitespace-nowrap ${
+                        speechRate === opt.rate
+                          ? 'bg-amber-500 text-white shadow-2xs font-extrabold'
+                          : 'text-slate-600 hover:text-amber-950 hover:bg-amber-100/60'
+                      }`}
+                      title={opt.title}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
 
                 {/* Auto-Play Toggle */}
                 <button
@@ -388,7 +419,7 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
                     playClickSound();
                     setAutoPlayAudio(!autoPlayAudio);
                   }}
-                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all flex items-center gap-1 cursor-pointer shadow-2xs ${
+                  className={`px-2.5 py-1 rounded-xl text-[11px] font-bold border transition-all flex items-center gap-1 cursor-pointer shadow-2xs ${
                     autoPlayAudio 
                       ? 'bg-amber-500 text-white border-amber-600' 
                       : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'
@@ -396,7 +427,8 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
                   title="Putar audio secara otomatis ketika nomor soal dibuka"
                 >
                   <Volume2 className="w-3.5 h-3.5" />
-                  <span>Auto-Suara: {autoPlayAudio ? 'ON' : 'OFF'}</span>
+                  <span className="hidden xs:inline">Auto:</span>
+                  <span>{autoPlayAudio ? 'ON' : 'OFF'}</span>
                 </button>
               </div>
             </div>

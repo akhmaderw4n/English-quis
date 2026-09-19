@@ -53,7 +53,7 @@ export function playAudioChime() {
 }
 
 export interface SpeechOptions {
-  rate?: number; // 0.8 to 1.2, default 0.92
+  rate?: number; // 0.70 to 1.10, default 0.80 for high clarity
   pitch?: number; // default 1.0
   onStart?: () => void;
   onEnd?: () => void;
@@ -63,17 +63,63 @@ export interface SpeechOptions {
 
 let currentUtterance: SpeechSynthesisUtterance | null = null;
 
+// Clean and format text to produce crisp, articulate speech with natural breathing pauses
+export function formatTextForClearSpeech(text: string): string {
+  if (!text) return '';
+  return text
+    // Remove markdown symbols that TTS might read or stumble on
+    .replace(/[*_#`~]/g, '')
+    .replace(/•/g, ', ')
+    // Clear pause after major recipe section headers
+    .replace(/(Ingredients|Steps|Method|Utensils|Tools|Equipment|Directions|Question):\s*/gi, '$1. ')
+    // Clear pause after numbered steps: "1. First" -> "Step 1. First"
+    .replace(/(\b\d+)\.\s+/g, 'Step $1. ')
+    // Clear pause after colons & semicolons
+    .replace(/;\s*/g, ', ')
+    .replace(/:\s*/g, '. ')
+    // Transform newlines into sentence breaks
+    .replace(/\n+/g, '. ')
+    // Clean up duplicate punctuation and whitespace
+    .replace(/,\s*,+/g, ', ')
+    .replace(/\.\s*\.+/g, '. ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
 function getEnglishVoice(): SpeechSynthesisVoice | null {
   if (typeof window === 'undefined' || !('speechSynthesis' in window)) return null;
   const voices = window.speechSynthesis.getVoices();
   if (!voices || voices.length === 0) return null;
-  // Look for high quality English voices
-  return (
-    voices.find(v => v.lang.startsWith('en') && (v.name.includes('Natural') || v.name.includes('Google') || v.name.includes('Samantha') || v.name.includes('US') || v.name.includes('UK'))) ||
-    voices.find(v => v.lang.startsWith('en')) ||
-    voices[0] ||
-    null
-  );
+
+  // Rate voices based on clarity, naturalness, and English accent suitability
+  const scoreVoice = (v: SpeechSynthesisVoice): number => {
+    let score = 0;
+    const lang = (v.lang || '').toLowerCase();
+    const name = (v.name || '').toLowerCase();
+
+    if (!lang.startsWith('en')) return -100;
+    if (lang === 'en-us') score += 30;
+    else if (lang === 'en-gb') score += 25;
+    else score += 15;
+
+    // High quality natural voice keywords
+    if (name.includes('natural')) score += 35;
+    if (name.includes('google')) score += 30;
+    if (name.includes('online')) score += 20;
+    if (name.includes('samantha')) score += 25;
+    if (name.includes('daniel')) score += 25;
+    if (name.includes('karen')) score += 20;
+    if (name.includes('serena')) score += 20;
+    if (name.includes('oliver')) score += 20;
+    if (name.includes('premium')) score += 30;
+    if (name.includes('enhanced')) score += 30;
+    if (v.default) score += 5;
+
+    return score;
+  };
+
+  const sorted = [...voices].sort((a, b) => scoreVoice(b) - scoreVoice(a));
+  return sorted[0] && scoreVoice(sorted[0]) > 0 ? sorted[0] : null;
 }
 
 // Pre-warm voices listener
@@ -97,14 +143,16 @@ export function speakEnglish(text: string, options?: SpeechOptions) {
     playAudioChime();
   }
 
-  // Brief delay after chime so speech starts smoothly
-  const delay = options?.playChime !== false ? 250 : 0;
+  // Brief delay after chime so speech starts smoothly without clipping
+  const delay = options?.playChime !== false ? 260 : 0;
   setTimeout(() => {
     if (!soundEnabled) return;
     try {
-      const utterance = new SpeechSynthesisUtterance(text);
+      const clearText = formatTextForClearSpeech(text);
+      const utterance = new SpeechSynthesisUtterance(clearText);
       utterance.lang = 'en-US';
-      utterance.rate = options?.rate || 0.92; // Natural, clear speed for SMP Grade 7 students
+      // Default rate calibrated to 0.80 for crystal-clear enunciation for Grade 7 SMP students
+      utterance.rate = options?.rate !== undefined ? options.rate : 0.80;
       utterance.pitch = options?.pitch || 1.0;
 
       const voice = getEnglishVoice();

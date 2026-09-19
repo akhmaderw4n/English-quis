@@ -30,7 +30,7 @@ export const ReviewModal: React.FC<ReviewModalProps> = ({
       setPlayingId(q.id);
       const textToSpeak = q.audioScript || q.question;
       speakEnglish(textToSpeak, {
-        rate: 0.92,
+        rate: 0.80, // Crystal-clear enunciation calibrated for SMP Grade 7
         onStart: () => setPlayingId(q.id),
         onEnd: () => setPlayingId(null),
         onError: () => setPlayingId(null),

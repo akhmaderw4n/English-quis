@@ -19,10 +19,146 @@ function getAudioContext(): AudioContext | null {
 
 export function setSoundEnabled(enabled: boolean) {
   soundEnabled = enabled;
+  if (!enabled) {
+    stopSpeech();
+  }
 }
 
 export function isSoundEnabled(): boolean {
   return soundEnabled;
+}
+
+export function playAudioChime() {
+  if (!soundEnabled) return;
+  try {
+    const ctx = getAudioContext();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    // Pleasant two-tone chime D5 -> A5 (587.33Hz -> 880Hz) to signal audio start
+    [587.33, 880.0].forEach((freq, idx) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, now + idx * 0.1);
+      gain.gain.setValueAtTime(0.12, now + idx * 0.1);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.1 + 0.22);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now + idx * 0.1);
+      osc.stop(now + idx * 0.1 + 0.22);
+    });
+  } catch (e) {
+    // Ignore
+  }
+}
+
+export interface SpeechOptions {
+  rate?: number; // 0.8 to 1.2, default 0.92
+  pitch?: number; // default 1.0
+  onStart?: () => void;
+  onEnd?: () => void;
+  onError?: (err?: unknown) => void;
+  playChime?: boolean; // default true
+}
+
+let currentUtterance: SpeechSynthesisUtterance | null = null;
+
+function getEnglishVoice(): SpeechSynthesisVoice | null {
+  if (typeof window === 'undefined' || !('speechSynthesis' in window)) return null;
+  const voices = window.speechSynthesis.getVoices();
+  if (!voices || voices.length === 0) return null;
+  // Look for high quality English voices
+  return (
+    voices.find(v => v.lang.startsWith('en') && (v.name.includes('Natural') || v.name.includes('Google') || v.name.includes('Samantha') || v.name.includes('US') || v.name.includes('UK'))) ||
+    voices.find(v => v.lang.startsWith('en')) ||
+    voices[0] ||
+    null
+  );
+}
+
+// Pre-warm voices listener
+if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+  window.speechSynthesis.onvoiceschanged = () => {
+    // voices ready
+  };
+}
+
+export function speakEnglish(text: string, options?: SpeechOptions) {
+  if (!soundEnabled) return;
+  if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
+    console.warn('SpeechSynthesis is not supported in this browser.');
+    options?.onError?.('SpeechSynthesis not supported');
+    return;
+  }
+
+  stopSpeech();
+
+  if (options?.playChime !== false) {
+    playAudioChime();
+  }
+
+  // Brief delay after chime so speech starts smoothly
+  const delay = options?.playChime !== false ? 250 : 0;
+  setTimeout(() => {
+    if (!soundEnabled) return;
+    try {
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = 'en-US';
+      utterance.rate = options?.rate || 0.92; // Natural, clear speed for SMP Grade 7 students
+      utterance.pitch = options?.pitch || 1.0;
+
+      const voice = getEnglishVoice();
+      if (voice) {
+        utterance.voice = voice;
+      }
+
+      utterance.onstart = () => {
+        options?.onStart?.();
+      };
+
+      utterance.onend = () => {
+        currentUtterance = null;
+        options?.onEnd?.();
+      };
+
+      utterance.onerror = (event) => {
+        currentUtterance = null;
+        if (event.error !== 'canceled' && event.error !== 'interrupted') {
+          options?.onError?.(event);
+        } else {
+          options?.onEnd?.();
+        }
+      };
+
+      currentUtterance = utterance;
+      window.speechSynthesis.speak(utterance);
+    } catch (err) {
+      console.error('Error starting speech synthesis:', err);
+      options?.onError?.(err);
+    }
+  }, delay);
+}
+
+export function stopSpeech() {
+  if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+    try {
+      window.speechSynthesis.cancel();
+      currentUtterance = null;
+    } catch (e) {
+      // Ignore
+    }
+  }
+}
+
+export function isSpeechSpeaking(): boolean {
+  if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+    return window.speechSynthesis.speaking;
+  }
+  return false;
+}
+
+export function hasSpeechSynthesisSupport(): boolean {
+  return typeof window !== 'undefined' && 'speechSynthesis' in window;
 }
 
 export function playClickSound() {

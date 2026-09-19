@@ -13,7 +13,7 @@ import { QuizScreen } from './components/QuizScreen';
 import { ResultScreen } from './components/ResultScreen';
 import { TeacherDashboard } from './components/TeacherDashboard';
 import { TeacherPinModal } from './components/TeacherPinModal';
-import { isSoundEnabled, setSoundEnabled, playClickSound } from './utils/audio';
+import { isSoundEnabled, setSoundEnabled, playClickSound, stopSpeech } from './utils/audio';
 import {
   subscribeToSubmissions,
   saveSubmissionToFirebase,
@@ -297,7 +297,12 @@ export default function App() {
           <QuizScreen
             student={currentStudent}
             onFinishQuiz={handleFinishQuiz}
-            onExitQuiz={() => setCurrentView('start')}
+            onExitQuiz={() => {
+              stopSpeech();
+              setCurrentView('start');
+            }}
+            soundOn={soundOn}
+            onToggleSound={handleToggleSound}
           />
         )}
 

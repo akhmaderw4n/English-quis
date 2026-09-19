@@ -11,6 +11,10 @@ export interface Question {
   explanation: string;
   topic: string;
   unitReference: string; // e.g. "Chapter 2 - Unit 3: A Secret Recipe"
+  hasAudio?: boolean; // Indicates listening / audio question
+  audioTitle?: string; // e.g. "Audio Listening 2.1: Recipe Method"
+  audioScript?: string; // Text to be spoken
+  listeningInstruction?: string; // Instructions for student
 }
 
 export interface StudentInfo {

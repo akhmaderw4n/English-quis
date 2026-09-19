@@ -12,28 +12,42 @@ import {
   CheckCircle2, 
   HelpCircle,
   Sparkles,
-  Send
+  Send,
+  Volume2,
+  VolumeX,
+  RotateCcw,
+  Square,
+  Headphones
 } from 'lucide-react';
 import { Question, StudentInfo } from '../types';
 import { QUIZ_QUESTIONS, QUIZ_METADATA } from '../data/quizData';
-import { playClickSound } from '../utils/audio';
+import { playClickSound, speakEnglish, stopSpeech } from '../utils/audio';
 
 interface QuizScreenProps {
   student: StudentInfo;
   onFinishQuiz: (answers: Record<number, 'A' | 'B' | 'C' | 'D'>, timeSpentSeconds: number) => void;
   onExitQuiz: () => void;
+  soundOn?: boolean;
+  onToggleSound?: () => void;
 }
 
 export const QuizScreen: React.FC<QuizScreenProps> = ({
   student,
   onFinishQuiz,
   onExitQuiz,
+  soundOn = true,
+  onToggleSound,
 }) => {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [answers, setAnswers] = useState<Record<number, 'A' | 'B' | 'C' | 'D'>>({});
   const [flagged, setFlagged] = useState<Record<number, boolean>>({});
   const [seconds, setSeconds] = useState(0);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
+
+  // Audio Playback states for listening questions
+  const [isPlayingAudio, setIsPlayingAudio] = useState(false);
+  const [speechRate, setSpeechRate] = useState<number>(0.92);
+  const [autoPlayAudio, setAutoPlayAudio] = useState<boolean>(true);
 
   // Timer
   useEffect(() => {
@@ -47,6 +61,67 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
   const currentAnswer = answers[currentQuestion.id];
   const answeredCount = Object.keys(answers).length;
   const isAllAnswered = answeredCount === QUIZ_QUESTIONS.length;
+
+  // Auto-play audio when arriving at a question with audio enabled
+  useEffect(() => {
+    stopSpeech();
+    setIsPlayingAudio(false);
+
+    if (currentQuestion.hasAudio && autoPlayAudio && soundOn) {
+      const textToSpeak = currentQuestion.audioScript || currentQuestion.question;
+      const timer = setTimeout(() => {
+        setIsPlayingAudio(true);
+        speakEnglish(textToSpeak, {
+          rate: speechRate,
+          onStart: () => setIsPlayingAudio(true),
+          onEnd: () => setIsPlayingAudio(false),
+          onError: () => setIsPlayingAudio(false),
+        });
+      }, 400);
+
+      return () => clearTimeout(timer);
+    }
+  }, [currentIndex, autoPlayAudio, soundOn, speechRate]);
+
+  // Clean up speech when unmounting
+  useEffect(() => {
+    return () => {
+      stopSpeech();
+    };
+  }, []);
+
+  const handleTogglePlayAudio = (overrideText?: string) => {
+    playClickSound();
+    if (isPlayingAudio) {
+      stopSpeech();
+      setIsPlayingAudio(false);
+    } else {
+      const textToSpeak = overrideText || currentQuestion.audioScript || currentQuestion.question;
+      setIsPlayingAudio(true);
+      speakEnglish(textToSpeak, {
+        rate: speechRate,
+        onStart: () => setIsPlayingAudio(true),
+        onEnd: () => setIsPlayingAudio(false),
+        onError: () => setIsPlayingAudio(false),
+      });
+    }
+  };
+
+  const handleReplayAudio = () => {
+    playClickSound();
+    stopSpeech();
+    setIsPlayingAudio(false);
+    const textToSpeak = currentQuestion.audioScript || currentQuestion.question;
+    setTimeout(() => {
+      setIsPlayingAudio(true);
+      speakEnglish(textToSpeak, {
+        rate: speechRate,
+        onStart: () => setIsPlayingAudio(true),
+        onEnd: () => setIsPlayingAudio(false),
+        onError: () => setIsPlayingAudio(false),
+      });
+    }, 150);
+  };
 
   const handleSelectOption = (key: 'A' | 'B' | 'C' | 'D') => {
     playClickSound();
@@ -66,6 +141,8 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
 
   const handleNext = () => {
     playClickSound();
+    stopSpeech();
+    setIsPlayingAudio(false);
     if (currentIndex < QUIZ_QUESTIONS.length - 1) {
       setCurrentIndex(currentIndex + 1);
     }
@@ -73,6 +150,8 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
 
   const handlePrev = () => {
     playClickSound();
+    stopSpeech();
+    setIsPlayingAudio(false);
     if (currentIndex > 0) {
       setCurrentIndex(currentIndex - 1);
     }
@@ -80,6 +159,8 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
 
   const handleJumpTo = (index: number) => {
     playClickSound();
+    stopSpeech();
+    setIsPlayingAudio(false);
     setCurrentIndex(index);
   };
 
@@ -89,6 +170,8 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
   };
 
   const handleConfirmSubmit = () => {
+    stopSpeech();
+    setIsPlayingAudio(false);
     setShowConfirmModal(false);
     onFinishQuiz(answers, seconds);
   };
@@ -119,6 +202,32 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
           </div>
 
           <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+            {/* Direct Sound Toggle in Quiz Screen */}
+            {onToggleSound && (
+              <button
+                type="button"
+                onClick={() => {
+                  playClickSound();
+                  onToggleSound();
+                }}
+                className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl border text-xs font-bold transition-all shadow-2xs cursor-pointer active:scale-95 ${
+                  soundOn 
+                    ? 'bg-amber-100/90 text-amber-900 border-amber-300 hover:bg-amber-200' 
+                    : 'bg-slate-100 text-slate-500 border-slate-300 hover:bg-slate-200'
+                }`}
+                title={soundOn ? 'Suara Aktif (Klik untuk bisukan)' : 'Suara Mati (Klik untuk aktifkan)'}
+              >
+                {soundOn ? (
+                  <Volume2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-amber-700" />
+                ) : (
+                  <VolumeX className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-slate-400" />
+                )}
+                <span className="hidden xs:inline text-[11px] sm:text-xs">
+                  {soundOn ? 'Suara ON' : 'Mute'}
+                </span>
+              </button>
+            )}
+
             {/* Timer */}
             <div className="flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl bg-slate-100 border border-slate-200 text-slate-800 font-mono text-xs sm:text-sm font-bold shadow-2xs">
               <Clock className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-amber-600 animate-pulse" />
@@ -144,11 +253,12 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
       {/* Question Progress Numbers Pills (5 cols on mobile for large tap target, 10 cols on tablet/desktop) */}
       <div className="bg-white rounded-2xl p-3 sm:p-4 border border-slate-200 mb-4 sm:mb-6 shadow-2xs">
         <div className="flex items-center justify-between mb-2.5 px-1">
-          <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-            Nomor Soal ({currentIndex + 1} dari 10):
+          <span className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+            <span>Nomor Soal ({currentIndex + 1} dari 10):</span>
           </span>
-          <span className="text-[11px] text-slate-400">
-            Ketuk nomor untuk loncat
+          <span className="text-[11px] text-slate-400 flex items-center gap-1">
+            <Headphones className="w-3 h-3 text-amber-600" />
+            <span>Ikon headphone = Soal Audio</span>
           </span>
         </div>
         <div className="grid grid-cols-5 sm:grid-cols-10 gap-1.5 sm:gap-2">
@@ -174,6 +284,9 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
                 className={`py-2 sm:py-2.5 min-h-[38px] sm:min-h-[42px] rounded-xl text-xs sm:text-sm font-bold border transition-all flex flex-col items-center justify-center relative cursor-pointer active:scale-95 ${pillStyle}`}
               >
                 <span>{idx + 1}</span>
+                {q.hasAudio && !isFlagged && (
+                  <Headphones className={`w-2.5 h-2.5 absolute top-1 right-1 opacity-75 ${isCurrent ? 'text-white' : 'text-amber-600'}`} />
+                )}
                 {isFlagged && (
                   <span className="w-1.5 h-1.5 rounded-full bg-rose-500 absolute top-1 right-1" />
                 )}
@@ -225,12 +338,144 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
           </button>
         </div>
 
+        {/* Dedicated Audio Listening Box for Listening Questions */}
+        {currentQuestion.hasAudio && (
+          <div className="mb-4 sm:mb-6 p-3.5 sm:p-5 rounded-2xl bg-linear-to-r from-amber-50 via-orange-50/60 to-amber-50 border-2 border-amber-300/90 shadow-xs">
+            <div className="flex flex-wrap items-center justify-between gap-2.5 mb-3">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <span className={`w-9 h-9 sm:w-10 sm:h-10 rounded-xl flex items-center justify-center text-white shrink-0 shadow-xs transition-all ${
+                  isPlayingAudio ? 'bg-amber-600 scale-105 ring-3 ring-amber-300' : 'bg-amber-500'
+                }`}>
+                  <Headphones className={`w-5 h-5 ${isPlayingAudio ? 'animate-bounce' : ''}`} />
+                </span>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-xs sm:text-sm font-black text-amber-950 uppercase tracking-wide truncate">
+                      {currentQuestion.audioTitle || 'Soal Berbasis Audio / Listening'}
+                    </span>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-extrabold flex items-center gap-1 shrink-0 border border-emerald-200">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                      Audio Siap Diputar
+                    </span>
+                  </div>
+                  {currentQuestion.listeningInstruction && (
+                    <p className="text-[11px] sm:text-xs text-slate-600 mt-0.5 leading-snug">
+                      {currentQuestion.listeningInstruction}
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              {/* Controls: Speed & Auto-Play Switch */}
+              <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+                {/* Speed toggle */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    playClickSound();
+                    setSpeechRate(prev => prev === 0.92 ? 0.75 : prev === 0.75 ? 1.1 : 0.92);
+                  }}
+                  className="px-2.5 py-1 rounded-lg bg-white border border-amber-300 text-[11px] font-bold text-amber-900 shadow-2xs hover:bg-amber-50 transition-colors cursor-pointer"
+                  title="Atur kecepatan audio (0.75x Lambat, 1.0x Normal, 1.1x Cepat)"
+                >
+                  ⚡ {speechRate === 0.75 ? '0.75x (Lambat)' : speechRate === 1.1 ? '1.1x (Cepat)' : '1.0x (Normal)'}
+                </button>
+
+                {/* Auto-Play Toggle */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    playClickSound();
+                    setAutoPlayAudio(!autoPlayAudio);
+                  }}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all flex items-center gap-1 cursor-pointer shadow-2xs ${
+                    autoPlayAudio 
+                      ? 'bg-amber-500 text-white border-amber-600' 
+                      : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'
+                  }`}
+                  title="Putar audio secara otomatis ketika nomor soal dibuka"
+                >
+                  <Volume2 className="w-3.5 h-3.5" />
+                  <span>Auto-Suara: {autoPlayAudio ? 'ON' : 'OFF'}</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Audio Action Bar */}
+            <div className="flex items-center gap-2.5 sm:gap-3 bg-white p-2.5 sm:p-3 rounded-xl border border-amber-200/90 shadow-2xs">
+              {/* Play / Pause Primary Button */}
+              <button
+                type="button"
+                onClick={() => handleTogglePlayAudio()}
+                className={`px-4 sm:px-5 py-2.5 rounded-xl font-extrabold text-xs sm:text-sm flex items-center gap-2 shadow-xs transition-all active:scale-95 cursor-pointer shrink-0 ${
+                  isPlayingAudio
+                    ? 'bg-rose-600 hover:bg-rose-700 text-white ring-2 ring-rose-300'
+                    : 'bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white'
+                }`}
+              >
+                {isPlayingAudio ? (
+                  <>
+                    <Square className="w-3.5 h-3.5 sm:w-4 sm:h-4 fill-current" />
+                    <span>Hentikan Suara</span>
+                  </>
+                ) : (
+                  <>
+                    <Volume2 className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                    <span>Putar Audio Soal</span>
+                  </>
+                )}
+              </button>
+
+              {/* Replay Button */}
+              <button
+                type="button"
+                onClick={handleReplayAudio}
+                className="p-2.5 rounded-xl border border-slate-200 hover:bg-slate-100 text-slate-700 active:scale-95 transition-all cursor-pointer shrink-0"
+                title="Putar Ulang dari Awal"
+              >
+                <RotateCcw className="w-4 h-4" />
+              </button>
+
+              {/* Wave Visualizer & Status */}
+              <div className="flex-1 flex items-center gap-2 min-w-0 px-1">
+                {isPlayingAudio ? (
+                  <div className="flex items-center gap-1 h-5 overflow-hidden">
+                    <span className="w-1 bg-amber-500 rounded-full animate-[pulse_0.4s_ease-in-out_infinite] h-3"></span>
+                    <span className="w-1 bg-orange-500 rounded-full animate-[pulse_0.6s_ease-in-out_infinite] h-5"></span>
+                    <span className="w-1 bg-amber-600 rounded-full animate-[pulse_0.3s_ease-in-out_infinite] h-4"></span>
+                    <span className="w-1 bg-emerald-500 rounded-full animate-[pulse_0.5s_ease-in-out_infinite] h-5"></span>
+                    <span className="w-1 bg-amber-500 rounded-full animate-[pulse_0.7s_ease-in-out_infinite] h-3"></span>
+                    <span className="text-[11px] sm:text-xs font-bold text-amber-900 ml-1.5 truncate">
+                      Sedang memperdengarkan audio pelafalan bahasa Inggris...
+                    </span>
+                  </div>
+                ) : (
+                  <span className="text-[11px] sm:text-xs text-slate-500 italic truncate">
+                    Suara siap diputar. Klik tombol untuk mendengarkan.
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Optional Context Box (Recipe Text / Worksheet Excerpt) */}
         {currentQuestion.contextText && (
           <div className="mb-4 sm:mb-6 p-3.5 sm:p-5 rounded-xl sm:rounded-2xl bg-amber-50/80 border border-amber-200 text-slate-800">
-            <div className="flex items-center gap-1.5 font-bold text-xs text-amber-900 uppercase tracking-wider mb-2">
-              <BookOpen className="w-3.5 h-3.5 text-amber-700 shrink-0" />
-              <span className="truncate">{currentQuestion.contextTitle || 'Teks Rujukan Resep (English for Nusantara)'}</span>
+            <div className="flex items-center justify-between gap-1.5 mb-2">
+              <div className="flex items-center gap-1.5 font-bold text-xs text-amber-900 uppercase tracking-wider">
+                <BookOpen className="w-3.5 h-3.5 text-amber-700 shrink-0" />
+                <span className="truncate">{currentQuestion.contextTitle || 'Teks Rujukan Resep (English for Nusantara)'}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => handleTogglePlayAudio(currentQuestion.contextText)}
+                className="text-[11px] font-bold text-amber-800 hover:text-amber-950 flex items-center gap-1 px-2 py-0.5 rounded-md hover:bg-amber-200/60 transition-colors"
+                title="Dengarkan teks bacaan ini"
+              >
+                <Volume2 className="w-3 h-3" />
+                <span>Dengarkan Teks</span>
+              </button>
             </div>
             <pre className="whitespace-pre-wrap font-sans text-xs sm:text-sm text-slate-700 leading-relaxed bg-white/90 p-3 sm:p-4 rounded-xl border border-amber-100 overflow-x-auto">
               {currentQuestion.contextText}
@@ -238,10 +483,20 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
           </div>
         )}
 
-        {/* Question Text */}
-        <h2 className="text-sm sm:text-lg font-bold text-slate-900 leading-relaxed mb-4 sm:mb-6">
-          {currentQuestion.question}
-        </h2>
+        {/* Question Text with listen button */}
+        <div className="flex items-start justify-between gap-3 mb-4 sm:mb-6">
+          <h2 className="text-sm sm:text-lg font-bold text-slate-900 leading-relaxed">
+            {currentQuestion.question}
+          </h2>
+          <button
+            type="button"
+            onClick={() => handleTogglePlayAudio(currentQuestion.question)}
+            className="shrink-0 p-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 shadow-2xs active:scale-95 transition-all cursor-pointer"
+            title="Dengarkan pembacaan pertanyaan ini"
+          >
+            <Volume2 className="w-4 h-4" />
+          </button>
+        </div>
 
         {/* Options List */}
         <div className="space-y-2.5 sm:space-y-3">

@@ -1,8 +1,9 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { motion } from 'motion/react';
-import { X, CheckCircle, XCircle, BookOpen, AlertCircle, Sparkles } from 'lucide-react';
+import { X, CheckCircle, XCircle, BookOpen, AlertCircle, Sparkles, Volume2, Headphones, Square } from 'lucide-react';
 import { Question } from '../types';
 import { QUIZ_QUESTIONS, QUIZ_METADATA } from '../data/quizData';
+import { speakEnglish, stopSpeech, playClickSound } from '../utils/audio';
 
 interface ReviewModalProps {
   studentAnswers: Record<number, 'A' | 'B' | 'C' | 'D'>;
@@ -17,6 +18,31 @@ export const ReviewModal: React.FC<ReviewModalProps> = ({
   score,
   onClose,
 }) => {
+  const [playingId, setPlayingId] = useState<number | null>(null);
+
+  const handlePlayQuestionAudio = (q: Question) => {
+    playClickSound();
+    if (playingId === q.id) {
+      stopSpeech();
+      setPlayingId(null);
+    } else {
+      stopSpeech();
+      setPlayingId(q.id);
+      const textToSpeak = q.audioScript || q.question;
+      speakEnglish(textToSpeak, {
+        rate: 0.92,
+        onStart: () => setPlayingId(q.id),
+        onEnd: () => setPlayingId(null),
+        onError: () => setPlayingId(null),
+      });
+    }
+  };
+
+  const handleClose = () => {
+    stopSpeech();
+    setPlayingId(null);
+    onClose();
+  };
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-0 sm:p-4 overflow-y-auto">
       <motion.div
@@ -43,7 +69,7 @@ export const ReviewModal: React.FC<ReviewModalProps> = ({
 
           <button
             type="button"
-            onClick={onClose}
+            onClick={handleClose}
             className="p-2 sm:p-2.5 rounded-xl text-slate-500 hover:text-slate-800 hover:bg-white active:bg-slate-100 transition-colors shrink-0 cursor-pointer"
             aria-label="Tutup"
           >
@@ -98,6 +124,44 @@ export const ReviewModal: React.FC<ReviewModalProps> = ({
                     )}
                   </div>
                 </div>
+
+                {/* Audio Listening Bar if Question has Audio */}
+                {q.hasAudio && (
+                  <div className="mb-3 flex items-center justify-between gap-2 p-2 sm:p-2.5 rounded-xl bg-amber-100/70 border border-amber-300 shadow-2xs">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Headphones className="w-4 h-4 text-amber-800 shrink-0" />
+                      <div className="min-w-0">
+                        <span className="text-xs font-bold text-amber-950 block truncate">
+                          {q.audioTitle || 'Audio Soal Listening'}
+                        </span>
+                        <span className="text-[10px] text-amber-800 hidden sm:inline">
+                          Dengarkan kembali pelafalan suara audio soal ini
+                        </span>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handlePlayQuestionAudio(q)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all shadow-2xs cursor-pointer active:scale-95 shrink-0 ${
+                        playingId === q.id
+                          ? 'bg-rose-600 text-white animate-pulse'
+                          : 'bg-amber-500 hover:bg-amber-600 text-white'
+                      }`}
+                    >
+                      {playingId === q.id ? (
+                        <>
+                          <Square className="w-3.5 h-3.5 fill-current" />
+                          <span>Hentikan Suara</span>
+                        </>
+                      ) : (
+                        <>
+                          <Volume2 className="w-3.5 h-3.5" />
+                          <span>Putar Audio</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                )}
 
                 {/* Context Text */}
                 {q.contextText && (

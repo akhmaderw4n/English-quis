@@ -39,6 +39,22 @@ service cloud.firestore {
       data.teacherPin is string && data.teacherPin.size() >= 4 && data.teacherPin.size() <= 20;
     }
 
+    function isValidViolation(data) {
+      return data.keys().hasAll([
+        'id', 'studentName', 'studentClass', 'studentNumber',
+        'questionNumber', 'violationCount', 'timestamp', 'unlockToken', 'status'
+      ]) &&
+      data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+      data.studentName is string && data.studentName.size() > 0 && data.studentName.size() <= 120 &&
+      data.studentClass is string && data.studentClass.size() > 0 && data.studentClass.size() <= 30 &&
+      data.studentNumber is string && data.studentNumber.size() > 0 && data.studentNumber.size() <= 15 &&
+      data.questionNumber is number && data.questionNumber >= 1 &&
+      data.violationCount is number && data.violationCount >= 1 &&
+      data.timestamp is string &&
+      data.unlockToken is string && data.unlockToken.size() > 0 && data.unlockToken.size() <= 30 &&
+      (data.status == 'locked' || data.status == 'unlocked');
+    }
+
     // Default deny catch-all
     match /{document=**} {
       allow read, write: if false;
@@ -64,6 +80,14 @@ service cloud.firestore {
       allow read: if true;
       allow create, update: if isValidId(settingId) && isValidSettings(incoming());
       allow delete: if false;
+    }
+
+    // Real-time violations notifications for teacher dashboard
+    match /violations/{violationId} {
+      allow read: if true;
+      allow create: if isValidId(violationId) && isValidViolation(incoming());
+      allow update: if isValidId(violationId) && isValidViolation(incoming());
+      allow delete: if isValidId(violationId);
     }
   }
 }

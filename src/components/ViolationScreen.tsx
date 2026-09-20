@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   ShieldAlert, 
@@ -12,10 +12,12 @@ import {
   AlertTriangle,
   ArrowRight,
   Sparkles,
-  Lock
+  Lock,
+  Radio
 } from 'lucide-react';
 import { ViolationLockSession } from '../types';
 import { playClickSound, playUnlockSuccessSound, playWrongSound } from '../utils/audio';
+import { listenToViolationStatus } from '../services/firebase';
 
 interface ViolationScreenProps {
   session: ViolationLockSession;
@@ -32,6 +34,25 @@ export const ViolationScreen: React.FC<ViolationScreenProps> = ({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isCopied, setIsCopied] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isRemoteUnlocked, setIsRemoteUnlocked] = useState(false);
+
+  // Listen to remote unlock command from Teacher Dashboard in real-time
+  useEffect(() => {
+    if (!session.id) return;
+    const unsubscribe = listenToViolationStatus(session.id, (status) => {
+      if (status === 'unlocked' && !isRemoteUnlocked) {
+        setIsRemoteUnlocked(true);
+        playUnlockSuccessSound();
+        setTimeout(() => {
+          onUnlock('GURU_REMOTE_UNLOCKED');
+        }, 1200);
+      }
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [session.id, onUnlock, isRemoteUnlocked]);
 
   const formatTime = (totalSeconds: number) => {
     const mins = Math.floor(totalSeconds / 60);
@@ -121,16 +142,35 @@ export const ViolationScreen: React.FC<ViolationScreenProps> = ({
         </div>
 
         <div className="p-4 sm:p-6 space-y-4 sm:space-y-5">
-          {/* Reason Alert Callout */}
-          <div className="p-3.5 sm:p-4 rounded-2xl bg-rose-950/40 border border-rose-800/60 text-rose-200 flex items-start gap-3">
-            <AlertTriangle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
-            <div className="text-xs sm:text-sm leading-relaxed">
-              <span className="font-bold text-rose-100 block mb-0.5">
-                Peringatan: {session.reason || 'Terdeteksi membuka tab lain atau beralih aplikasi'}
-              </span>
-              Aplikasi kuis otomatis menutup tampilan soal untuk menjaga integritas ujian. Seluruh jawaban Anda telah disimpan dengan aman.
+          {/* Remote Unlocked Notification from Teacher */}
+          {isRemoteUnlocked ? (
+            <motion.div 
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              className="p-4 rounded-2xl bg-emerald-950/80 border-2 border-emerald-500 text-emerald-200 flex items-center gap-3 shadow-lg"
+            >
+              <CheckCircle2 className="w-7 h-7 text-emerald-400 shrink-0 animate-bounce" />
+              <div>
+                <span className="font-bold text-emerald-100 block text-sm">
+                  Kunci Berhasil Dibuka oleh Guru!
+                </span>
+                <span className="text-xs text-emerald-300">
+                  Guru telah memberikan izin melanjutkan ujian dari Dashboard. Mengalihkan ke soal terakhir Anda...
+                </span>
+              </div>
+            </motion.div>
+          ) : (
+            /* Reason Alert Callout */
+            <div className="p-3.5 sm:p-4 rounded-2xl bg-rose-950/40 border border-rose-800/60 text-rose-200 flex items-start gap-3">
+              <AlertTriangle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
+              <div className="text-xs sm:text-sm leading-relaxed">
+                <span className="font-bold text-rose-100 block mb-0.5">
+                  Peringatan: {session.reason || 'Terdeteksi membuka tab lain atau beralih aplikasi'}
+                </span>
+                Aplikasi kuis otomatis menutup tampilan soal untuk menjaga integritas ujian. Notifikasi pelanggaran telah dikirimkan ke Dashboard Guru.
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Student Status & Position Summary */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 sm:gap-3">

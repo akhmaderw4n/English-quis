@@ -108,6 +108,73 @@
         }
       },
       "required": ["teacherPin"]
+    },
+    "violation": {
+      "title": "QuizViolationRecord",
+      "description": "Pencatatan notifikasi pelanggaran siswa saat mengerjakan kuis untuk guru",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "ID unik pelanggaran",
+          "maxLength": 128
+        },
+        "studentName": {
+          "type": "string",
+          "description": "Nama siswa pelanggar",
+          "maxLength": 120,
+          "minLength": 1
+        },
+        "studentClass": {
+          "type": "string",
+          "description": "Kelas siswa",
+          "maxLength": 30,
+          "minLength": 1
+        },
+        "studentNumber": {
+          "type": "string",
+          "description": "Nomor absen siswa",
+          "maxLength": 15,
+          "minLength": 1
+        },
+        "questionNumber": {
+          "type": "number",
+          "description": "Nomor soal saat pelanggaran terjadi"
+        },
+        "violationCount": {
+          "type": "number",
+          "description": "Jumlah pelanggaran yang dilakukan"
+        },
+        "timestamp": {
+          "type": "string",
+          "description": "Waktu terjadinya pelanggaran format ISO"
+        },
+        "unlockToken": {
+          "type": "string",
+          "description": "Token resmi untuk membuka kunci kuis",
+          "maxLength": 30
+        },
+        "status": {
+          "type": "string",
+          "description": "Status penguncian sesi kuis (locked atau unlocked)",
+          "enum": ["locked", "unlocked"]
+        },
+        "unlockedAt": {
+          "type": "string",
+          "description": "Waktu kunci dibuka kembali"
+        }
+      },
+      "required": [
+        "id",
+        "studentName",
+        "studentClass",
+        "studentNumber",
+        "questionNumber",
+        "violationCount",
+        "timestamp",
+        "unlockToken",
+        "status"
+      ]
     }
   },
   "firestore": {
@@ -122,6 +189,10 @@
     "/settings/{settingId}": {
       "schema": "appSettings",
       "description": "Dokumen pengaturan aplikasi seperti PIN guru yang tersinkronisasi lintas perangkat"
+    },
+    "/violations/{violationId}": {
+      "schema": "violation",
+      "description": "Koleksi log dan notifikasi pelanggaran siswa saat kuis berlangsung yang dipantau guru secara real-time"
     }
   }
 }

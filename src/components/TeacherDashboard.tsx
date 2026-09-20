@@ -29,17 +29,28 @@ import {
   CloudOff,
   AlertTriangle,
   Loader2,
-  ShieldAlert
+  ShieldAlert,
+  Copy,
+  Check,
+  Radio,
+  Clock,
+  Lock,
+  Unlock,
+  Bell
 } from 'lucide-react';
-import { QuizSubmission } from '../types';
+import { QuizSubmission, QuizViolationRecord } from '../types';
 import { QUIZ_QUESTIONS, QUIZ_METADATA, INITIAL_STUDENT_SUBMISSIONS } from '../data/quizData';
 import { ReviewModal } from './ReviewModal';
 import { TeacherInputStudent } from './TeacherInputStudent';
-import { playClickSound } from '../utils/audio';
+import { playClickSound, playUnlockSuccessSound } from '../utils/audio';
 import { executePrintStudentScore, executePrintTeacherRecap, openTeacherRecapInNewTab } from '../utils/printReport';
 
 interface TeacherDashboardProps {
   submissions: QuizSubmission[];
+  violations?: QuizViolationRecord[];
+  onUnlockViolationRemotely?: (violationId: string) => Promise<void> | void;
+  onDeleteViolation?: (violationId: string) => Promise<void> | void;
+  onClearAllViolations?: () => Promise<void> | void;
   currentPin: string;
   onChangePin: (newPin: string) => void;
   onClearSubmissions: () => Promise<void> | void;
@@ -54,6 +65,10 @@ interface TeacherDashboardProps {
 
 export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
   submissions,
+  violations = [],
+  onUnlockViolationRemotely,
+  onDeleteViolation,
+  onClearAllViolations,
   currentPin,
   onChangePin,
   onClearSubmissions,
@@ -65,7 +80,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
   isDbConnected = true,
   isSyncing = false,
 }) => {
-  const [activeTab, setActiveTab] = useState<'recap' | 'input' | 'analysis' | 'bank' | 'settings'>('recap');
+  const [activeTab, setActiveTab] = useState<'recap' | 'input' | 'analysis' | 'bank' | 'settings' | 'violations'>('recap');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedClass, setSelectedClass] = useState<string>('ALL');
   const [sortField, setSortField] = useState<'score' | 'name' | 'time'>('score');
@@ -75,6 +90,15 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
   // PIN change state
   const [newPinInput, setNewPinInput] = useState('');
   const [pinChangeMsg, setPinChangeMsg] = useState('');
+
+  // Violation monitoring state
+  const [violationSearch, setViolationSearch] = useState('');
+  const [violationStatusFilter, setViolationStatusFilter] = useState<'all' | 'locked' | 'unlocked'>('all');
+  const [copiedTokenId, setCopiedTokenId] = useState<string | null>(null);
+  const [unlockingViolationId, setUnlockingViolationId] = useState<string | null>(null);
+  const [isClearViolationsModalOpen, setIsClearViolationsModalOpen] = useState(false);
+  const [isClearingViolations, setIsClearingViolations] = useState(false);
+  const [violationToastMsg, setViolationToastMsg] = useState<string | null>(null);
 
   // Permanent Delete Modal states
   const [deleteTarget, setDeleteTarget] = useState<{
@@ -235,6 +259,67 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     setNewPinInput('');
   };
 
+  // Real-time violations derivations
+  const lockedViolations = useMemo(() => {
+    return violations.filter(v => v.status === 'locked');
+  }, [violations]);
+
+  const filteredViolations = useMemo(() => {
+    return violations.filter((v) => {
+      const q = violationSearch.toLowerCase();
+      const matchesSearch =
+        !violationSearch.trim() ||
+        v.studentName.toLowerCase().includes(q) ||
+        v.studentClass.toLowerCase().includes(q) ||
+        v.unlockToken.toLowerCase().includes(q);
+
+      const matchesStatus =
+        violationStatusFilter === 'all' || v.status === violationStatusFilter;
+
+      return matchesSearch && matchesStatus;
+    });
+  }, [violations, violationSearch, violationStatusFilter]);
+
+  const handleCopyViolationToken = (token: string, id: string) => {
+    playClickSound();
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(token);
+      setCopiedTokenId(id);
+      setTimeout(() => setCopiedTokenId(null), 2500);
+    }
+  };
+
+  const handleRemoteUnlock = async (violationId: string, studentName: string) => {
+    if (!onUnlockViolationRemotely) return;
+    playClickSound();
+    setUnlockingViolationId(violationId);
+    try {
+      await onUnlockViolationRemotely(violationId);
+      playUnlockSuccessSound();
+      setViolationToastMsg(`Kunci ujian untuk ${studentName} berhasil dibuka dari dashboard. Siswa dapat melanjutkan di soal terakhirnya.`);
+      setTimeout(() => setViolationToastMsg(null), 4500);
+    } catch (err) {
+      console.error('Error unlocking violation:', err);
+    } finally {
+      setUnlockingViolationId(null);
+    }
+  };
+
+  const handleConfirmClearViolations = async () => {
+    if (!onClearAllViolations) return;
+    setIsClearingViolations(true);
+    try {
+      await onClearAllViolations();
+      setIsClearViolationsModalOpen(false);
+      setViolationToastMsg('Seluruh riwayat notifikasi pelanggaran berhasil dibersihkan.');
+      setTimeout(() => setViolationToastMsg(null), 4000);
+    } catch (err) {
+      console.error('Error clearing violations:', err);
+    } finally {
+      setIsClearingViolations(false);
+    }
+  };
+
   return (
     <div className="py-4 sm:py-8 max-w-6xl mx-auto px-3.5 sm:px-6">
       {/* Top Banner */}
@@ -340,6 +425,82 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
         </div>
       </div>
 
+      {/* Live Feedback Toast */}
+      {violationToastMsg && (
+        <motion.div
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="mb-4 p-3.5 rounded-2xl bg-emerald-50 border border-emerald-300 text-emerald-900 text-xs font-semibold flex items-center justify-between gap-3 shadow-xs"
+        >
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>{violationToastMsg}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setViolationToastMsg(null)}
+            className="text-emerald-700 hover:text-emerald-900 text-xs font-bold cursor-pointer"
+          >
+            ✕
+          </button>
+        </motion.div>
+      )}
+
+      {/* Real-time Emergency Warning Alert: Siswa Sedang Terkunci */}
+      {lockedViolations.length > 0 && (
+        <motion.div
+          initial={{ opacity: 0, scale: 0.98 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="mb-5 p-4 rounded-2xl bg-rose-50 border-2 border-rose-400 text-rose-950 flex flex-col md:flex-row items-start md:items-center justify-between gap-3 shadow-md"
+        >
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-rose-600 text-white flex items-center justify-center shrink-0 shadow-xs animate-bounce">
+              <ShieldAlert className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="px-2 py-0.5 rounded-md bg-rose-600 text-white font-black text-[10px] uppercase tracking-wider animate-pulse">
+                  Peringatan Pelanggaran CBT
+                </span>
+                <span className="font-bold text-xs text-rose-800">
+                  {lockedViolations.length} Siswa Terkunci Otomatis
+                </span>
+              </div>
+              <p className="text-xs text-slate-700 mt-0.5 leading-relaxed">
+                Siswa terdeteksi membuka tab atau aplikasi lain. Kuis otomatis tertutup dan menunggu token pembuka kunci.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0 self-end md:self-auto flex-wrap">
+            {lockedViolations[0] && (
+              <div className="flex items-center gap-1.5 bg-white px-2.5 py-1.5 rounded-xl border border-rose-300 text-xs font-mono font-bold text-slate-800">
+                <span>{lockedViolations[0].studentName.split(' ')[0]}:</span>
+                <span className="text-rose-700 font-extrabold">{lockedViolations[0].unlockToken}</span>
+                <button
+                  type="button"
+                  onClick={() => handleCopyViolationToken(lockedViolations[0].unlockToken, lockedViolations[0].id)}
+                  className="p-1 text-slate-500 hover:text-slate-800 rounded cursor-pointer"
+                  title="Salin Token"
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                playClickSound();
+                setActiveTab('violations');
+              }}
+              className="px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs flex items-center gap-1.5 transition-all shadow-xs cursor-pointer"
+            >
+              <span>Lihat Log &amp; Buka Kunci ({lockedViolations.length}) &rarr;</span>
+            </button>
+          </div>
+        </motion.div>
+      )}
+
       {/* Tabs Navigation (Horizontally scrollable on mobile for sleek touch experience) */}
       <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3 border-b border-slate-200 mb-5 sm:mb-6 pb-2">
         <div className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto no-scrollbar pb-1 -mx-3.5 px-3.5 sm:mx-0 sm:px-0">
@@ -357,6 +518,32 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
           >
             <Table className="w-4 h-4" />
             <span>Rekap Nilai ({filteredSubmissions.length})</span>
+          </button>
+
+          {/* Violations Tab Button with Red Live Pulse Indicator */}
+          <button
+            type="button"
+            onClick={() => {
+              playClickSound();
+              setActiveTab('violations');
+            }}
+            className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-1.5 sm:gap-2 transition-all cursor-pointer shrink-0 whitespace-nowrap ${
+              activeTab === 'violations'
+                ? 'bg-rose-600 text-white shadow-xs'
+                : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+            }`}
+          >
+            <ShieldAlert className={`w-4 h-4 ${lockedViolations.length > 0 ? (activeTab === 'violations' ? 'text-white' : 'text-rose-600 animate-pulse') : 'text-slate-400'}`} />
+            <span>Notifikasi Pelanggaran</span>
+            {lockedViolations.length > 0 ? (
+              <span className="px-1.5 py-0.5 rounded-full text-[10px] font-black uppercase bg-rose-500 text-white animate-pulse">
+                {lockedViolations.length} Terkunci
+              </span>
+            ) : (
+              <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${activeTab === 'violations' ? 'bg-rose-700 text-white' : 'bg-slate-100 text-slate-600'}`}>
+                {violations.length}
+              </span>
+            )}
           </button>
 
           <button
@@ -617,10 +804,19 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                           <td className="py-3.5 px-4 font-bold text-slate-900">
                             <div>{sub.studentName}</div>
                             {Boolean(sub.violationsCount && sub.violationsCount > 0) && (
-                              <div className="inline-flex items-center gap-1 mt-0.5 px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 text-[10px] font-bold border border-rose-200">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  playClickSound();
+                                  setViolationSearch(sub.studentName);
+                                  setActiveTab('violations');
+                                }}
+                                className="inline-flex items-center gap-1 mt-0.5 px-1.5 py-0.5 rounded bg-rose-50 hover:bg-rose-100 text-rose-700 text-[10px] font-bold border border-rose-200 cursor-pointer transition-colors"
+                                title="Lihat rincian riwayat pelanggaran siswa ini di tab Notifikasi Pelanggaran"
+                              >
                                 <ShieldAlert className="w-3 h-3 text-rose-500 shrink-0" />
-                                <span>{sub.violationsCount}x Terkunci (Pindah Tab)</span>
-                              </div>
+                                <span>{sub.violationsCount}x Terkunci (Pindah Tab) &rarr;</span>
+                              </button>
                             )}
                           </td>
                           <td className="py-3.5 px-3">
@@ -960,6 +1156,271 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
         </div>
       )}
 
+      {/* Tab 5: NOTIFIKASI & LOG PELANGGARAN ANTI-CURANG */}
+      {activeTab === 'violations' && (
+        <div className="space-y-6">
+          {/* Header & Controls */}
+          <div className="bg-white p-4 sm:p-6 rounded-2xl border border-slate-200 shadow-2xs">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-100">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center shrink-0">
+                  <ShieldAlert className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900 text-base sm:text-lg">
+                    Notifikasi &amp; Log Pelanggaran Anti-Curang CBT
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Memantau siswa yang keluar jendela/aplikasi secara langsung. Anda dapat menyalin token pembuka atau membuka kunci kuis siswa dari sini.
+                  </p>
+                </div>
+              </div>
+
+              {violations.length > 0 && onClearAllViolations && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    playClickSound();
+                    setIsClearViolationsModalOpen(true);
+                  }}
+                  className="px-3.5 py-2 rounded-xl border border-rose-200 text-rose-700 hover:bg-rose-50 text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer self-start md:self-auto"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Bersihkan Riwayat Log</span>
+                </button>
+              )}
+            </div>
+
+            {/* Sub-KPI Summary */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-4">
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200">
+                <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
+                  Total Kejadian
+                </span>
+                <span className="text-xl sm:text-2xl font-black text-slate-800">
+                  {violations.length}
+                </span>
+              </div>
+              <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200">
+                <span className="text-[11px] font-bold text-rose-700 uppercase tracking-wider block flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-rose-600 animate-pulse"></span>
+                  Sedang Terkunci
+                </span>
+                <span className="text-xl sm:text-2xl font-black text-rose-700">
+                  {lockedViolations.length} Siswa
+                </span>
+              </div>
+              <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200">
+                <span className="text-[11px] font-bold text-emerald-700 uppercase tracking-wider block">
+                  Telah Dibuka / Diizinkan
+                </span>
+                <span className="text-xl sm:text-2xl font-black text-emerald-700">
+                  {violations.length - lockedViolations.length} Siswa
+                </span>
+              </div>
+            </div>
+
+            {/* Filter and Search Bar */}
+            <div className="flex flex-wrap items-center justify-between gap-3 mt-4 pt-4 border-t border-slate-100">
+              <div className="relative flex-1 min-w-[200px] max-w-sm">
+                <input
+                  type="text"
+                  value={violationSearch}
+                  onChange={(e) => setViolationSearch(e.target.value)}
+                  placeholder="Cari nama siswa, kelas, atau token..."
+                  className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-300 text-xs text-slate-800 focus:border-rose-500 focus:ring-1 focus:ring-rose-200 outline-hidden"
+                />
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
+              </div>
+
+              <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl">
+                {[
+                  { id: 'all', label: `Semua (${violations.length})` },
+                  { id: 'locked', label: `Terkunci (${lockedViolations.length})` },
+                  { id: 'unlocked', label: `Sudah Dibuka (${violations.length - lockedViolations.length})` },
+                ].map((f) => (
+                  <button
+                    key={f.id}
+                    type="button"
+                    onClick={() => {
+                      playClickSound();
+                      setViolationStatusFilter(f.id as 'all' | 'locked' | 'unlocked');
+                    }}
+                    className={`px-2.5 sm:px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                      violationStatusFilter === f.id
+                        ? 'bg-white text-slate-900 shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Violations List Cards */}
+          {filteredViolations.length === 0 ? (
+            <div className="bg-white p-8 sm:p-12 rounded-2xl border border-slate-200 text-center shadow-2xs">
+              <div className="w-16 h-16 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto mb-3">
+                <ShieldCheck className="w-8 h-8" />
+              </div>
+              <h4 className="font-bold text-slate-800 text-base">
+                {violations.length === 0 
+                  ? 'Belum Ada Pelanggaran yang Terdeteksi' 
+                  : 'Tidak Ditemukan Data yang Sesuai Filter'}
+              </h4>
+              <p className="text-xs text-slate-500 max-w-md mx-auto mt-1">
+                {violations.length === 0
+                  ? 'Semua siswa mengerjakan ujian dengan tertib dan fokus di layar CBT tanpa membuka tab lain.'
+                  : 'Cobalah ubah kata kunci pencarian atau ubah filter status di atas.'}
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {filteredViolations.map((v) => {
+                const isLocked = v.status === 'locked';
+                const isCopied = copiedTokenId === v.id;
+                const isUnlocking = unlockingViolationId === v.id;
+                const timeFormatted = new Date(v.timestamp).toLocaleTimeString('id-ID', {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                  second: '2-digit',
+                  day: 'numeric',
+                  month: 'short'
+                });
+
+                return (
+                  <div
+                    key={v.id}
+                    className={`p-4 sm:p-5 rounded-2xl border transition-all ${
+                      isLocked
+                        ? 'bg-rose-50/40 border-rose-300 shadow-xs ring-1 ring-rose-300'
+                        : 'bg-white border-slate-200 shadow-2xs'
+                    }`}
+                  >
+                    {/* Top Row: Name, Class & Status Badge */}
+                    <div className="flex items-start justify-between gap-3 mb-3">
+                      <div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-bold text-sm sm:text-base text-slate-900">
+                            {v.studentName}
+                          </span>
+                          <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-bold text-[11px] border border-slate-200">
+                            Kelas {v.studentClass} • Absen {v.studentNumber}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1.5 text-[11px] text-slate-500 mt-1">
+                          <Clock className="w-3 h-3 text-slate-400" />
+                          <span>{timeFormatted} WIB</span>
+                        </div>
+                      </div>
+
+                      {/* Status Badge */}
+                      <span className={`px-2.5 py-1 rounded-xl text-xs font-black shrink-0 flex items-center gap-1.5 ${
+                        isLocked
+                          ? 'bg-rose-600 text-white shadow-xs animate-pulse'
+                          : 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                      }`}>
+                        {isLocked ? (
+                          <>
+                            <Lock className="w-3.5 h-3.5" />
+                            <span>Terkunci</span>
+                          </>
+                        ) : (
+                          <>
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            <span>Sudah Dibuka</span>
+                          </>
+                        )}
+                      </span>
+                    </div>
+
+                    {/* Violation Information */}
+                    <div className="bg-white/80 rounded-xl p-3 border border-slate-200/80 mb-3.5 space-y-1.5 text-xs">
+                      <div className="flex items-center justify-between text-slate-700">
+                        <span className="text-slate-500">Posisi Ujian:</span>
+                        <span className="font-bold text-slate-900">
+                          Terkunci di Soal #{v.questionNumber}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between text-slate-700">
+                        <span className="text-slate-500">Frekuensi:</span>
+                        <span className="font-bold text-rose-700">
+                          Pelanggaran ke-{v.violationCount}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between text-slate-700 pt-1.5 border-t border-slate-100">
+                        <span className="text-slate-500">Token CBT Siswa:</span>
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-mono font-black text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200 text-xs">
+                            {v.unlockToken}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleCopyViolationToken(v.unlockToken, v.id)}
+                            className={`p-1 rounded transition-colors cursor-pointer ${
+                              isCopied ? 'bg-emerald-100 text-emerald-700' : 'hover:bg-slate-100 text-slate-500'
+                            }`}
+                            title="Salin Token"
+                          >
+                            {isCopied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Action Buttons */}
+                    <div className="flex items-center justify-between gap-2 pt-1">
+                      {onDeleteViolation && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            playClickSound();
+                            onDeleteViolation(v.id);
+                          }}
+                          className="px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer"
+                          title="Hapus log ini"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Hapus Log</span>
+                        </button>
+                      )}
+
+                      {isLocked ? (
+                        <button
+                          type="button"
+                          disabled={isUnlocking}
+                          onClick={() => handleRemoteUnlock(v.id, v.studentName)}
+                          className="ml-auto px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold text-xs flex items-center gap-1.5 transition-all shadow-xs cursor-pointer disabled:opacity-50"
+                        >
+                          {isUnlocking ? (
+                            <>
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              <span>Membuka Kunci...</span>
+                            </>
+                          ) : (
+                            <>
+                              <Unlock className="w-3.5 h-3.5" />
+                              <span>Buka Kunci untuk Siswa</span>
+                            </>
+                          )}
+                        </button>
+                      ) : (
+                        <span className="ml-auto text-[11px] font-bold text-emerald-700 flex items-center gap-1">
+                          <Check className="w-3.5 h-3.5" />
+                          <span>Ujian Sedang Dilanjutkan</span>
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Inspect Student Answer Sheet Modal */}
       {inspectSubmission && (
         <ReviewModal
@@ -1095,6 +1556,63 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                     <>
                       <Trash2 className="w-4 h-4" />
                       <span>Ya, Kosongkan Permanen</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Modal 3: Bersihkan Riwayat Notifikasi Pelanggaran */}
+      <AnimatePresence>
+        {isClearViolationsModalOpen && (
+          <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200"
+            >
+              <div className="w-12 h-12 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center mb-4">
+                <ShieldAlert className="w-6 h-6" />
+              </div>
+
+              <h3 className="text-lg font-bold text-slate-900 mb-1">
+                Bersihkan Riwayat Notifikasi Pelanggaran?
+              </h3>
+              <p className="text-xs text-slate-600 leading-relaxed mb-4">
+                Seluruh <strong>{violations.length} catatan log pelanggaran</strong> akan dihapus dari server Cloud Firestore. Data nilai kuis siswa tetap aman tersimpan.
+              </p>
+
+              <div className="flex items-center justify-end gap-2.5">
+                <button
+                  type="button"
+                  disabled={isClearingViolations}
+                  onClick={() => {
+                    playClickSound();
+                    setIsClearViolationsModalOpen(false);
+                  }}
+                  className="px-4 py-2.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-100 transition-colors disabled:opacity-50 cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  disabled={isClearingViolations}
+                  onClick={handleConfirmClearViolations}
+                  className="px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-xs font-bold text-white shadow-sm flex items-center gap-2 transition-colors disabled:opacity-50 cursor-pointer"
+                >
+                  {isClearingViolations ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Membersihkan...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 className="w-4 h-4" />
+                      <span>Ya, Bersihkan Semua Log</span>
                     </>
                   )}
                 </button>

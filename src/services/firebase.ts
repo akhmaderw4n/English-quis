@@ -14,7 +14,7 @@ import {
   orderBy 
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
-import { QuizSubmission } from '../types';
+import { QuizSubmission, QuizViolationRecord } from '../types';
 
 // Initialize Firebase App & Services
 const app = initializeApp(firebaseConfig);
@@ -93,6 +93,7 @@ export async function testConnection(): Promise<boolean> {
 const SUBMISSIONS_COLLECTION = 'submissions';
 const DELETED_COLLECTION = 'deletedSubmissions';
 const SETTINGS_COLLECTION = 'settings';
+const VIOLATIONS_COLLECTION = 'violations';
 
 /**
  * Real-time subscription to submissions across all devices with tombstone filtering.
@@ -314,4 +315,139 @@ export async function saveTeacherPinToFirebase(newPin: string): Promise<void> {
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, `${SETTINGS_COLLECTION}/app`);
   }
+}
+
+/**
+ * Real-time subscription to violations for the teacher dashboard.
+ */
+export function subscribeToViolations(
+  onData: (violations: QuizViolationRecord[]) => void,
+  onError?: (error: Error) => void
+): () => void {
+  const q = query(collection(db, VIOLATIONS_COLLECTION));
+
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const items: QuizViolationRecord[] = [];
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        items.push({
+          id: data.id || docSnap.id,
+          studentName: data.studentName || '',
+          studentClass: data.studentClass || '',
+          studentNumber: data.studentNumber || '',
+          questionNumber: typeof data.questionNumber === 'number' ? data.questionNumber : 1,
+          violationCount: typeof data.violationCount === 'number' ? data.violationCount : 1,
+          timestamp: data.timestamp || new Date().toISOString(),
+          unlockToken: data.unlockToken || '',
+          status: data.status === 'unlocked' ? 'unlocked' : 'locked',
+          unlockedAt: data.unlockedAt,
+        });
+      });
+      // Sort newest first
+      items.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+      onData(items);
+    },
+    (err) => {
+      console.warn('Violations subscription notice:', err?.message || err);
+      if (onError) onError(err);
+    }
+  );
+}
+
+/**
+ * Report a new student violation to Firestore so it immediately notifies teacher dashboards in real-time.
+ */
+export async function reportViolationToFirebase(violation: QuizViolationRecord): Promise<void> {
+  const docRef = doc(db, VIOLATIONS_COLLECTION, violation.id);
+  try {
+    await setDoc(docRef, {
+      id: violation.id,
+      studentName: violation.studentName,
+      studentClass: violation.studentClass,
+      studentNumber: violation.studentNumber,
+      questionNumber: violation.questionNumber,
+      violationCount: violation.violationCount,
+      timestamp: violation.timestamp,
+      unlockToken: violation.unlockToken,
+      status: violation.status,
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, `${VIOLATIONS_COLLECTION}/${violation.id}`);
+  }
+}
+
+/**
+ * Update violation status (e.g. unlocked by student or remotely by teacher).
+ */
+export async function updateViolationStatusInFirebase(
+  violationId: string, 
+  status: 'locked' | 'unlocked'
+): Promise<void> {
+  const docRef = doc(db, VIOLATIONS_COLLECTION, violationId);
+  try {
+    await setDoc(
+      docRef,
+      {
+        status,
+        unlockedAt: status === 'unlocked' ? new Date().toISOString() : undefined,
+      },
+      { merge: true }
+    );
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `${VIOLATIONS_COLLECTION}/${violationId}`);
+  }
+}
+
+/**
+ * Delete a single violation log entry from Firestore.
+ */
+export async function deleteViolationFromFirebase(violationId: string): Promise<void> {
+  const docRef = doc(db, VIOLATIONS_COLLECTION, violationId);
+  try {
+    await deleteDoc(docRef);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `${VIOLATIONS_COLLECTION}/${violationId}`);
+  }
+}
+
+/**
+ * Clear all violation history from Firestore.
+ */
+export async function clearAllViolationsFromFirebase(): Promise<void> {
+  try {
+    const snapshot = await getDocs(collection(db, VIOLATIONS_COLLECTION));
+    const batch = writeBatch(db);
+    snapshot.forEach((docSnap) => {
+      batch.delete(docSnap.ref);
+    });
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, VIOLATIONS_COLLECTION);
+  }
+}
+
+/**
+ * Listen to a specific violation's status in real-time (e.g. on student ViolationScreen for remote unlock).
+ */
+export function listenToViolationStatus(
+  violationId: string,
+  onStatusChange: (status: 'locked' | 'unlocked') => void
+): () => void {
+  const docRef = doc(db, VIOLATIONS_COLLECTION, violationId);
+  return onSnapshot(
+    docRef,
+    (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        if (data.status) {
+          onStatusChange(data.status);
+        }
+      }
+    },
+    (err) => {
+      console.warn('Violation status listener notice:', err?.message || err);
+    }
+  );
 }

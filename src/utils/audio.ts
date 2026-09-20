@@ -356,3 +356,30 @@ export function playUnlockSuccessSound() {
   }
 }
 
+/**
+ * Professional attention chime played on Teacher Dashboard when a student violation occurs.
+ */
+export function playTeacherNotificationSound() {
+  if (!soundEnabled) return;
+  try {
+    const ctx = getAudioContext();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    // Bell chime: 698.46Hz (F5) -> 1046.5Hz (C6) with gentle decay
+    [698.46, 1046.5].forEach((freq, idx) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, now + idx * 0.14);
+      gain.gain.setValueAtTime(0.16, now + idx * 0.14);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.14 + 0.35);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now + idx * 0.14);
+      osc.stop(now + idx * 0.14 + 0.35);
+    });
+  } catch (e) {
+    // Ignore
+  }
+}
+

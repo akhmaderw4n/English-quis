@@ -39,6 +39,7 @@ export interface QuizSubmission {
 }
 
 export interface ViolationLockSession {
+  id?: string;
   student: StudentInfo;
   lastQuestionIndex: number; // 0 to 9
   answers: Record<number, 'A' | 'B' | 'C' | 'D'>;
@@ -48,6 +49,19 @@ export interface ViolationLockSession {
   violationCount: number;
   violationTime: string;
   reason: string;
+}
+
+export interface QuizViolationRecord {
+  id: string; // Unique violation ID
+  studentName: string;
+  studentClass: string;
+  studentNumber: string;
+  questionNumber: number; // 1-indexed (e.g. Soal 4)
+  violationCount: number; // 1st violation, 2nd, etc.
+  timestamp: string; // ISO string
+  unlockToken: string; // The CBT unlock token e.g. "CBT-4921"
+  status: 'locked' | 'unlocked';
+  unlockedAt?: string;
 }
 
 export type ViewState = 'start' | 'quiz' | 'result' | 'dashboard' | 'violation_locked';

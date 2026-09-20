@@ -528,9 +528,10 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
                     Tempo:
                   </span>
                   {[
-                    { rate: 0.75, label: '0.75x Pelan', title: '0.75x (Perlahan & Sangat Jelas - Cocok untuk menyimak kata demi kata)' },
-                    { rate: 0.80, label: '0.80x Jelas ★', title: '0.80x (Jelas & Teratur - Rekomendasi Standar SMP Kelas 7)' },
-                    { rate: 0.90, label: '0.90x Normal', title: '0.90x (Kecepatan Percakapan Normal)' },
+                    { rate: 0.70, label: '0.70x Lambat', title: '0.70x (Sangat perlahan & jelas kata demi kata)' },
+                    { rate: 0.80, label: '0.80x Jelas ★', title: '0.80x (Tempo paling pas untuk siswa SMP Kelas 7)' },
+                    { rate: 0.90, label: '0.90x Sedang', title: '0.90x (Kecepatan bicara wajar)' },
+                    { rate: 1.00, label: '1.0x Normal', title: '1.0x (Kecepatan standar native speaker)' },
                   ].map(opt => (
                     <button
                       key={opt.rate}

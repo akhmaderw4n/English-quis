@@ -30,7 +30,8 @@ service cloud.firestore {
       data.correctCount is number && data.correctCount >= 0 && data.correctCount <= 100 &&
       data.wrongCount is number && data.wrongCount >= 0 && data.wrongCount <= 100 &&
       data.timeSpentSeconds is number && data.timeSpentSeconds >= 0 &&
-      data.submittedAt is string && data.submittedAt.size() <= 50;
+      data.submittedAt is string && data.submittedAt.size() <= 50 &&
+      (!('violationsCount' in data) || (data.violationsCount is number && data.violationsCount >= 0));
     }
 
     function isValidSettings(data) {

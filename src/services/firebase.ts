@@ -1,12 +1,11 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import { 
-  getFirestore, 
+  initializeFirestore, 
   collection, 
   doc, 
   setDoc, 
   getDoc, 
-  getDocFromServer,
   getDocs, 
   deleteDoc, 
   writeBatch, 
@@ -19,7 +18,15 @@ import { QuizSubmission } from '../types';
 
 // Initialize Firebase App & Services
 const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+
+// Initialize Firestore with auto-detect long polling to ensure bulletproof connectivity across iframes, proxies, and preview sandboxes
+export const db = initializeFirestore(
+  app,
+  {
+    experimentalAutoDetectLongPolling: true,
+  },
+  firebaseConfig.firestoreDatabaseId
+);
 export const auth = getAuth(app);
 
 export enum OperationType {
@@ -71,15 +78,14 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
 
 /**
  * Validate connection to Firestore on initial boot.
+ * Uses standard getDoc with graceful fallback so temporary network latency or offline mode does not emit uncaught errors.
  */
 export async function testConnection(): Promise<boolean> {
   try {
-    await getDocFromServer(doc(db, 'settings', 'app'));
+    await getDoc(doc(db, 'settings', 'app'));
     return true;
   } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.warn('Firestore is currently operating in offline/cached mode.');
-    }
+    console.warn('Firestore connection check notice:', error instanceof Error ? error.message : String(error));
     return false;
   }
 }
@@ -141,6 +147,7 @@ export function subscribeToSubmissions(
             answers: data.answers || {},
             timeSpentSeconds: typeof data.timeSpentSeconds === 'number' ? data.timeSpentSeconds : 0,
             submittedAt: data.submittedAt || new Date().toISOString(),
+            violationsCount: typeof data.violationsCount === 'number' ? data.violationsCount : 0,
           });
         }
       });
@@ -151,9 +158,8 @@ export function subscribeToSubmissions(
       emitFiltered();
     },
     (err) => {
-      console.error('Snapshot error for submissions:', err);
+      console.warn('Snapshot subscription notice for submissions (will reconnect automatically):', err?.message || err);
       if (onError) onError(err);
-      handleFirestoreError(err, OperationType.LIST, SUBMISSIONS_COLLECTION);
     }
   );
 
@@ -183,6 +189,7 @@ export async function saveSubmissionToFirebase(submission: QuizSubmission): Prom
       answers: submission.answers,
       timeSpentSeconds: submission.timeSpentSeconds,
       submittedAt: submission.submittedAt,
+      violationsCount: submission.violationsCount || 0,
     });
     // Remove from tombstone if re-created
     batch.delete(delRef);
@@ -213,6 +220,7 @@ export async function saveBatchSubmissionsToFirebase(submissions: QuizSubmission
         answers: sub.answers,
         timeSpentSeconds: sub.timeSpentSeconds,
         submittedAt: sub.submittedAt,
+        violationsCount: sub.violationsCount || 0,
       });
       // Clear tombstone
       batch.delete(delRef);

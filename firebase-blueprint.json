@@ -55,6 +55,10 @@
         "submittedAt": {
           "type": "string",
           "description": "Stempel waktu pengiriman kuis format ISO"
+        },
+        "violationsCount": {
+          "type": "number",
+          "description": "Jumlah pelanggaran keluar tab kuis yang tercatat"
         }
       },
       "required": [

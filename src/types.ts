@@ -35,6 +35,19 @@ export interface QuizSubmission {
   answers: Record<number, 'A' | 'B' | 'C' | 'D'>;
   timeSpentSeconds: number;
   submittedAt: string; // ISO string
+  violationsCount?: number; // Count of tab switch violations during test
 }
 
-export type ViewState = 'start' | 'quiz' | 'result' | 'dashboard';
+export interface ViolationLockSession {
+  student: StudentInfo;
+  lastQuestionIndex: number; // 0 to 9
+  answers: Record<number, 'A' | 'B' | 'C' | 'D'>;
+  flagged: Record<number, boolean>;
+  seconds: number;
+  unlockToken: string;
+  violationCount: number;
+  violationTime: string;
+  reason: string;
+}
+
+export type ViewState = 'start' | 'quiz' | 'result' | 'dashboard' | 'violation_locked';

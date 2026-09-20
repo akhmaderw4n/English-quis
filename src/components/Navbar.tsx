@@ -28,9 +28,9 @@ export const Navbar: React.FC<NavbarProps> = ({
         {/* Brand & Title */}
         <div 
           onClick={() => {
-            if (currentView !== 'quiz') onNavigate('start');
+            if (currentView !== 'quiz' && currentView !== 'violation_locked') onNavigate('start');
           }}
-          className={`flex items-center gap-2.5 sm:gap-3 min-w-0 ${currentView !== 'quiz' ? 'cursor-pointer active:scale-98 transition-transform' : ''}`}
+          className={`flex items-center gap-2.5 sm:gap-3 min-w-0 ${currentView !== 'quiz' && currentView !== 'violation_locked' ? 'cursor-pointer active:scale-98 transition-transform' : ''}`}
         >
           <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-br from-amber-500 to-orange-500 flex items-center justify-center text-white shadow-xs shrink-0">
             <BookOpen className="w-4 h-4 sm:w-5 sm:h-5" />

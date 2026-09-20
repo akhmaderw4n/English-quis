@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { ViewState, StudentInfo, QuizSubmission } from './types';
+import { ViewState, StudentInfo, QuizSubmission, ViolationLockSession } from './types';
 import { QUIZ_QUESTIONS, QUIZ_METADATA, INITIAL_STUDENT_SUBMISSIONS } from './data/quizData';
 import { Navbar } from './components/Navbar';
 import { Footer } from './components/Footer';
@@ -13,7 +13,8 @@ import { QuizScreen } from './components/QuizScreen';
 import { ResultScreen } from './components/ResultScreen';
 import { TeacherDashboard } from './components/TeacherDashboard';
 import { TeacherPinModal } from './components/TeacherPinModal';
-import { isSoundEnabled, setSoundEnabled, playClickSound, stopSpeech } from './utils/audio';
+import { ViolationScreen } from './components/ViolationScreen';
+import { isSoundEnabled, setSoundEnabled, playClickSound, stopSpeech, playViolationAlertSound } from './utils/audio';
 import {
   subscribeToSubmissions,
   saveSubmissionToFirebase,
@@ -27,6 +28,7 @@ import {
 
 const STORAGE_KEY_SUBMISSIONS = 'en_nusantara_quiz_submissions_v1';
 const STORAGE_KEY_PIN = 'en_nusantara_teacher_pin_v1';
+const STORAGE_KEY_VIOLATION = 'en_nusantara_active_violation_v1';
 
 export default function App() {
   const [currentView, setCurrentView] = useState<ViewState>('start');
@@ -36,6 +38,30 @@ export default function App() {
   const [soundOn, setSoundOn] = useState(true);
   const [isDbConnected, setIsDbConnected] = useState(true);
   const [isSyncing, setIsSyncing] = useState(true);
+
+  // Active Violation Lockout state (resuming test after tab switch)
+  const [violationSession, setViolationSession] = useState<ViolationLockSession | null>(() => {
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY_VIOLATION);
+      if (stored) {
+        return JSON.parse(stored);
+      }
+    } catch {
+      // Ignore
+    }
+    return null;
+  });
+  const [resumedFromViolation, setResumedFromViolation] = useState(false);
+
+  // Auto-restore locked state if browser was refreshed during lockout
+  useEffect(() => {
+    if (violationSession) {
+      if (violationSession.student && !currentStudent) {
+        setCurrentStudent(violationSession.student);
+      }
+      setCurrentView('violation_locked');
+    }
+  }, []);
 
   // Load teacher PIN with fallback to default "1234"
   const [teacherPin, setTeacherPin] = useState<string>(() => {
@@ -124,11 +150,68 @@ export default function App() {
   // Start Quiz
   const handleStartQuiz = (student: StudentInfo) => {
     setCurrentStudent(student);
+    setViolationSession(null);
+    try {
+      localStorage.removeItem(STORAGE_KEY_VIOLATION);
+    } catch {}
+    setResumedFromViolation(false);
+    setCurrentView('quiz');
+  };
+
+  // Triggered when a student switches tabs or minimizes the window during test
+  const handleViolationOccurred = (violationData: {
+    lastQuestionIndex: number;
+    answers: Record<number, 'A' | 'B' | 'C' | 'D'>;
+    flagged: Record<number, boolean>;
+    seconds: number;
+    reason: string;
+  }) => {
+    if (!currentStudent) return;
+    stopSpeech();
+    playViolationAlertSound();
+
+    // Generate a clean, official exam unlock token (e.g. CBT-7824)
+    const randomCode = Math.floor(1000 + Math.random() * 9000);
+    const unlockToken = `CBT-${randomCode}`;
+    const prevCount = violationSession ? violationSession.violationCount : 0;
+
+    const session: ViolationLockSession = {
+      student: currentStudent,
+      lastQuestionIndex: violationData.lastQuestionIndex,
+      answers: violationData.answers,
+      flagged: violationData.flagged,
+      seconds: violationData.seconds,
+      unlockToken,
+      violationCount: prevCount + 1,
+      violationTime: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+      reason: violationData.reason,
+    };
+
+    setViolationSession(session);
+    try {
+      localStorage.setItem(STORAGE_KEY_VIOLATION, JSON.stringify(session));
+    } catch {}
+
+    setCurrentView('violation_locked');
+  };
+
+  // Unlocks the exam and returns student directly to their last question number
+  const handleUnlockViolation = () => {
+    if (!violationSession) return;
+    try {
+      localStorage.removeItem(STORAGE_KEY_VIOLATION);
+    } catch {}
+
+    setResumedFromViolation(true);
     setCurrentView('quiz');
   };
 
   // Finish Quiz & Record Submission to Cloud Database
-  const handleFinishQuiz = async (answers: Record<number, 'A' | 'B' | 'C' | 'D'>, timeSpentSeconds: number) => {
+  const handleFinishQuiz = async (
+    answers: Record<number, 'A' | 'B' | 'C' | 'D'>, 
+    timeSpentSeconds: number,
+    violationsCount?: number
+  ) => {
     if (!currentStudent) return;
 
     let correctCount = 0;
@@ -140,6 +223,8 @@ export default function App() {
 
     const score = correctCount * QUIZ_METADATA.pointsPerQuestion;
     const wrongCount = QUIZ_QUESTIONS.length - correctCount;
+
+    const actualViolations = violationsCount ?? (violationSession ? violationSession.violationCount : 0);
 
     const newSubmission: QuizSubmission = {
       id: `sub-${Date.now()}`,
@@ -153,7 +238,15 @@ export default function App() {
       answers,
       timeSpentSeconds,
       submittedAt: new Date().toISOString(),
+      violationsCount: actualViolations,
     };
+
+    // Clean up violation lockout data
+    setViolationSession(null);
+    try {
+      localStorage.removeItem(STORAGE_KEY_VIOLATION);
+    } catch {}
+    setResumedFromViolation(false);
 
     // Optimistically update local view
     setSubmissions(prev => [newSubmission, ...prev.filter(s => s.id !== newSubmission.id)]);
@@ -265,24 +358,26 @@ export default function App() {
 
   return (
     <div className="min-h-screen flex flex-col bg-linear-to-b from-amber-50/40 via-white to-orange-50/20 text-slate-800">
-      {/* Navigation */}
-      <div className="no-print">
-        <Navbar
-          currentView={currentView}
-          onNavigate={(view) => {
-            playClickSound();
-            setCurrentView(view);
-          }}
-          onOpenTeacherAuth={() => {
-            playClickSound();
-            setIsTeacherAuthOpen(true);
-          }}
-          soundOn={soundOn}
-          onToggleSound={handleToggleSound}
-          studentName={currentStudent?.name}
-          isDbConnected={isDbConnected}
-        />
-      </div>
+      {/* Navigation (Hidden during full lockout) */}
+      {currentView !== 'violation_locked' && (
+        <div className="no-print">
+          <Navbar
+            currentView={currentView}
+            onNavigate={(view) => {
+              playClickSound();
+              setCurrentView(view);
+            }}
+            onOpenTeacherAuth={() => {
+              playClickSound();
+              setIsTeacherAuthOpen(true);
+            }}
+            soundOn={soundOn}
+            onToggleSound={handleToggleSound}
+            studentName={currentStudent?.name}
+            isDbConnected={isDbConnected}
+          />
+        </div>
+      )}
 
       {/* Main View Area */}
       <main className="flex-1">
@@ -303,6 +398,21 @@ export default function App() {
             }}
             soundOn={soundOn}
             onToggleSound={handleToggleSound}
+            initialIndex={violationSession ? violationSession.lastQuestionIndex : 0}
+            initialAnswers={violationSession ? violationSession.answers : {}}
+            initialFlagged={violationSession ? violationSession.flagged : {}}
+            initialSeconds={violationSession ? violationSession.seconds : 0}
+            initialViolationsCount={violationSession ? violationSession.violationCount : 0}
+            onViolationOccurred={handleViolationOccurred}
+            resumedBannerNotice={resumedFromViolation}
+          />
+        )}
+
+        {currentView === 'violation_locked' && violationSession && (
+          <ViolationScreen
+            session={violationSession}
+            teacherPin={teacherPin}
+            onUnlock={handleUnlockViolation}
           />
         )}
 
@@ -342,10 +452,12 @@ export default function App() {
         />
       )}
 
-      {/* Footer with Mandatory Branding */}
-      <div className="no-print">
-        <Footer />
-      </div>
+      {/* Footer with Mandatory Branding (Hidden during full lockout) */}
+      {currentView !== 'violation_locked' && (
+        <div className="no-print">
+          <Footer />
+        </div>
+      )}
     </div>
   );
 }

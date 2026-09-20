@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   ChevronLeft, 
@@ -17,7 +17,10 @@ import {
   VolumeX,
   RotateCcw,
   Square,
-  Headphones
+  Headphones,
+  ShieldAlert,
+  ShieldCheck,
+  X
 } from 'lucide-react';
 import { Question, StudentInfo } from '../types';
 import { QUIZ_QUESTIONS, QUIZ_METADATA } from '../data/quizData';
@@ -25,10 +28,23 @@ import { playClickSound, speakEnglish, stopSpeech } from '../utils/audio';
 
 interface QuizScreenProps {
   student: StudentInfo;
-  onFinishQuiz: (answers: Record<number, 'A' | 'B' | 'C' | 'D'>, timeSpentSeconds: number) => void;
+  onFinishQuiz: (answers: Record<number, 'A' | 'B' | 'C' | 'D'>, timeSpentSeconds: number, violationsCount?: number) => void;
   onExitQuiz: () => void;
   soundOn?: boolean;
   onToggleSound?: () => void;
+  initialIndex?: number;
+  initialAnswers?: Record<number, 'A' | 'B' | 'C' | 'D'>;
+  initialFlagged?: Record<number, boolean>;
+  initialSeconds?: number;
+  initialViolationsCount?: number;
+  onViolationOccurred?: (state: {
+    lastQuestionIndex: number;
+    answers: Record<number, 'A' | 'B' | 'C' | 'D'>;
+    flagged: Record<number, boolean>;
+    seconds: number;
+    reason: string;
+  }) => void;
+  resumedBannerNotice?: boolean;
 }
 
 export const QuizScreen: React.FC<QuizScreenProps> = ({
@@ -37,17 +53,78 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
   onExitQuiz,
   soundOn = true,
   onToggleSound,
+  initialIndex = 0,
+  initialAnswers = {},
+  initialFlagged = {},
+  initialSeconds = 0,
+  initialViolationsCount = 0,
+  onViolationOccurred,
+  resumedBannerNotice = false,
 }) => {
-  const [currentIndex, setCurrentIndex] = useState(0);
-  const [answers, setAnswers] = useState<Record<number, 'A' | 'B' | 'C' | 'D'>>({});
-  const [flagged, setFlagged] = useState<Record<number, boolean>>({});
-  const [seconds, setSeconds] = useState(0);
+  const [currentIndex, setCurrentIndex] = useState(initialIndex);
+  const [answers, setAnswers] = useState<Record<number, 'A' | 'B' | 'C' | 'D'>>(initialAnswers);
+  const [flagged, setFlagged] = useState<Record<number, boolean>>(initialFlagged);
+  const [seconds, setSeconds] = useState(initialSeconds);
+  const [violationsCount, setViolationsCount] = useState(initialViolationsCount);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [showResumedToast, setShowResumedToast] = useState(resumedBannerNotice);
+  const isSubmittedRef = useRef(false);
 
   // Audio Playback states for listening questions
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
   const [speechRate, setSpeechRate] = useState<number>(0.80);
   const [autoPlayAudio, setAutoPlayAudio] = useState<boolean>(true);
+
+  // Tab-switch and window-blur violation detection (Anti-Curang CBT)
+  useEffect(() => {
+    let blurTimeout: ReturnType<typeof setTimeout> | null = null;
+
+    const reportViolation = (reason: string) => {
+      if (isSubmittedRef.current) return;
+      stopSpeech();
+      onViolationOccurred?.({
+        lastQuestionIndex: currentIndex,
+        answers,
+        flagged,
+        seconds,
+        reason,
+      });
+    };
+
+    const handleVisibility = () => {
+      if (document.hidden && !isSubmittedRef.current) {
+        reportViolation('Terdeteksi membuka tab lain atau meminimalkan browser');
+      }
+    };
+
+    const handleBlur = () => {
+      if (isSubmittedRef.current) return;
+      if (blurTimeout) clearTimeout(blurTimeout);
+      blurTimeout = setTimeout(() => {
+        if (!isSubmittedRef.current && (document.hidden || !document.hasFocus())) {
+          reportViolation('Terdeteksi beralih jendela atau membuka aplikasi lain');
+        }
+      }, 250);
+    };
+
+    const handleFocus = () => {
+      if (blurTimeout) {
+        clearTimeout(blurTimeout);
+        blurTimeout = null;
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('blur', handleBlur);
+    window.addEventListener('focus', handleFocus);
+
+    return () => {
+      if (blurTimeout) clearTimeout(blurTimeout);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('blur', handleBlur);
+      window.removeEventListener('focus', handleFocus);
+    };
+  }, [currentIndex, answers, flagged, seconds, onViolationOccurred]);
 
   // Timer
   useEffect(() => {
@@ -188,10 +265,11 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
   };
 
   const handleConfirmSubmit = () => {
+    isSubmittedRef.current = true;
     stopSpeech();
     setIsPlayingAudio(false);
     setShowConfirmModal(false);
-    onFinishQuiz(answers, seconds);
+    onFinishQuiz(answers, seconds, violationsCount);
   };
 
   const formatTime = (totalSec: number) => {
@@ -202,6 +280,41 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
 
   return (
     <div className="py-4 sm:py-6 max-w-5xl mx-auto px-3 sm:px-6">
+      {/* Resumed Notification Banner */}
+      <AnimatePresence>
+        {showResumedToast && (
+          <motion.div
+            initial={{ opacity: 0, y: -8, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -8 }}
+            className="mb-3.5 p-3 sm:p-3.5 rounded-2xl bg-emerald-50 border border-emerald-300/90 text-emerald-950 flex items-center justify-between gap-3 shadow-xs"
+          >
+            <div className="flex items-center gap-2.5 text-xs sm:text-sm">
+              <div className="w-7 h-7 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                <CheckCircle2 className="w-4 h-4" />
+              </div>
+              <div className="leading-snug">
+                <span className="font-extrabold text-emerald-900 block sm:inline mr-1.5">
+                  Aplikasi Dibuka Kembali:
+                </span>
+                <span>
+                  Anda melanjutkan pengerjaan tepat di <strong className="text-emerald-900 underline underline-offset-2">Soal Nomor {currentIndex + 1}</strong>.
+                  Seluruh jawaban sebelumnya tersimpan aman.
+                </span>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowResumedToast(false)}
+              className="p-1.5 rounded-lg text-emerald-700 hover:text-emerald-900 hover:bg-emerald-100/80 transition-colors shrink-0 cursor-pointer"
+              title="Tutup pemberitahuan"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Top Bar: Student Info, Timer & Linear Progress */}
       <div className="bg-white rounded-2xl p-3.5 sm:p-5 border border-amber-200/80 shadow-xs mb-4 sm:mb-6">
         <div className="flex flex-wrap items-center justify-between gap-2.5 sm:gap-4 mb-3">
@@ -219,7 +332,30 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
             </p>
           </div>
 
-          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+          <div className="flex items-center gap-2 sm:gap-3 shrink-0 flex-wrap">
+            {/* Anti-Cheat Tab Protection Badge */}
+            <div 
+              className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl border text-[11px] sm:text-xs font-bold shadow-2xs ${
+                violationsCount > 0 
+                  ? 'bg-rose-50 text-rose-900 border-rose-200' 
+                  : 'bg-emerald-50 text-emerald-900 border-emerald-200'
+              }`}
+              title={violationsCount > 0 ? `Pernah terkunci (${violationsCount}x). Membuka tab lain akan otomatis mengunci kuis.` : 'Anti-Curang Aktif: Membuka tab lain akan otomatis mengunci aplikasi.'}
+            >
+              {violationsCount > 0 ? (
+                <>
+                  <ShieldAlert className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                  <span>{violationsCount}x Terkunci</span>
+                </>
+              ) : (
+                <>
+                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                  <span className="hidden sm:inline">Anti-Curang:</span>
+                  <span>Proteksi Tab ON</span>
+                </>
+              )}
+            </div>
+
             {/* Direct Sound Toggle in Quiz Screen */}
             {onToggleSound && (
               <button

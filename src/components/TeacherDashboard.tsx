@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Users, 
@@ -53,7 +53,7 @@ import { QuestionEditModal } from './QuestionEditModal';
 import { PermanentDeleteModal } from './PermanentDeleteModal';
 import { ProcedureTextEditor } from './ProcedureTextEditor';
 import { downloadWordCompatibleDoc } from '../utils/wordQuestionParser';
-import { playClickSound, playUnlockSuccessSound } from '../utils/audio';
+import { playClickSound, playUnlockSuccessSound, playViolationAlertSound } from '../utils/audio';
 import { executePrintStudentScore, executePrintTeacherRecap, openTeacherRecapInNewTab } from '../utils/printReport';
 
 interface TeacherDashboardProps {
@@ -106,8 +106,8 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
   const [activeTab, setActiveTab] = useState<'recap' | 'input' | 'analysis' | 'bank' | 'procedure' | 'settings' | 'violations'>('recap');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedClass, setSelectedClass] = useState<string>('ALL');
-  const [sortField, setSortField] = useState<'score' | 'name' | 'time'>('score');
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
+  const [sortField, setSortField] = useState<'absen' | 'score' | 'name' | 'time'>('absen');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [inspectSubmission, setInspectSubmission] = useState<QuizSubmission | null>(null);
 
   // Question Bank / Word Import states
@@ -201,7 +201,16 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
         return matchesClass && matchesSearch;
       })
       .sort((a, b) => {
-        if (sortField === 'score') {
+        if (sortField === 'absen') {
+          const numA = parseInt(String(a.studentNumber).replace(/\D/g, ''), 10) || 0;
+          const numB = parseInt(String(b.studentNumber).replace(/\D/g, ''), 10) || 0;
+          if (numA !== numB) {
+            return sortOrder === 'asc' ? numA - numB : numB - numA;
+          }
+          const classCompare = a.studentClass.localeCompare(b.studentClass);
+          if (classCompare !== 0) return classCompare;
+          return a.studentName.localeCompare(b.studentName);
+        } else if (sortField === 'score') {
           return sortOrder === 'desc' ? b.score - a.score : a.score - b.score;
         } else if (sortField === 'name') {
           return sortOrder === 'desc' 
@@ -304,6 +313,21 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     return violations.filter(v => v.status === 'locked');
   }, [violations]);
 
+  // Real-time incoming violation notification alert for Teacher Dashboard
+  const prevViolationsCountRef = useRef<number>(violations.length);
+  useEffect(() => {
+    if (violations.length > prevViolationsCountRef.current) {
+      const latest = violations[0];
+      if (latest) {
+        playViolationAlertSound();
+        setViolationToastMsg(
+          `Notifikasi Pelanggaran Baru: ${latest.studentName} (Kelas ${latest.studentClass} • Absen ${latest.studentNumber}) terdeteksi keluar tab/aplikasi pada Soal #${latest.questionNumber} (Pelanggaran ke-${latest.violationCount}).`
+        );
+      }
+    }
+    prevViolationsCountRef.current = violations.length;
+  }, [violations]);
+
   const filteredViolations = useMemo(() => {
     return violations.filter((v) => {
       const q = violationSearch.toLowerCase();
@@ -311,7 +335,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
         !violationSearch.trim() ||
         v.studentName.toLowerCase().includes(q) ||
         v.studentClass.toLowerCase().includes(q) ||
-        v.unlockToken.toLowerCase().includes(q);
+        (v.reason || '').toLowerCase().includes(q);
 
       const matchesStatus =
         violationStatusFilter === 'all' || v.status === violationStatusFilter;
@@ -320,15 +344,6 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     });
   }, [violations, violationSearch, violationStatusFilter]);
 
-  const handleCopyViolationToken = (token: string, id: string) => {
-    playClickSound();
-    if (navigator.clipboard) {
-      navigator.clipboard.writeText(token);
-      setCopiedTokenId(id);
-      setTimeout(() => setCopiedTokenId(null), 2500);
-    }
-  };
-
   const handleRemoteUnlock = async (violationId: string, studentName: string) => {
     if (!onUnlockViolationRemotely) return;
     playClickSound();
@@ -336,10 +351,10 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     try {
       await onUnlockViolationRemotely(violationId);
       playUnlockSuccessSound();
-      setViolationToastMsg(`Kunci ujian untuk ${studentName} berhasil dibuka dari dashboard. Siswa dapat melanjutkan di soal terakhirnya.`);
-      setTimeout(() => setViolationToastMsg(null), 4500);
+      setViolationToastMsg(`Notifikasi pelanggaran ${studentName} telah ditandai sudah dicek.`);
+      setTimeout(() => setViolationToastMsg(null), 4000);
     } catch (err) {
-      console.error('Error unlocking violation:', err);
+      console.error('Error updating violation status:', err);
     } finally {
       setUnlockingViolationId(null);
     }
@@ -596,7 +611,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
         </motion.div>
       )}
 
-      {/* Real-time Emergency Warning Alert: Siswa Sedang Terkunci */}
+      {/* Real-time Notification Banner: Notifikasi Pelanggaran Siswa di Akun Guru */}
       {lockedViolations.length > 0 && (
         <motion.div
           initial={{ opacity: 0, scale: 0.98 }}
@@ -605,37 +620,35 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
         >
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-rose-600 text-white flex items-center justify-center shrink-0 shadow-xs animate-bounce">
-              <ShieldAlert className="w-5 h-5" />
+              <Bell className="w-5 h-5" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <span className="px-2 py-0.5 rounded-md bg-rose-600 text-white font-black text-[10px] uppercase tracking-wider animate-pulse">
-                  Peringatan Pelanggaran CBT
+                  Notifikasi Pelanggaran Siswa
                 </span>
                 <span className="font-bold text-xs text-rose-800">
-                  {lockedViolations.length} Siswa Terkunci Otomatis
+                  {lockedViolations.length} Notifikasi Baru Belum Dicek
                 </span>
               </div>
-              <p className="text-xs text-slate-700 mt-0.5 leading-relaxed">
-                Siswa terdeteksi membuka tab atau aplikasi lain. Kuis otomatis tertutup dan menunggu token pembuka kunci.
-              </p>
+              {lockedViolations[0] && (
+                <p className="text-xs text-slate-800 mt-1 leading-relaxed">
+                  <strong>{lockedViolations[0].studentName}</strong> (Kelas {lockedViolations[0].studentClass} &bull; Absen {lockedViolations[0].studentNumber}) terdeteksi keluar tab/aplikasi pada <strong>Soal #{lockedViolations[0].questionNumber}</strong> (Pelanggaran ke-{lockedViolations[0].violationCount}).
+                </p>
+              )}
             </div>
           </div>
 
           <div className="flex items-center gap-2 shrink-0 self-end md:self-auto flex-wrap">
             {lockedViolations[0] && (
-              <div className="flex items-center gap-1.5 bg-white px-2.5 py-1.5 rounded-xl border border-rose-300 text-xs font-mono font-bold text-slate-800">
-                <span>{lockedViolations[0].studentName.split(' ')[0]}:</span>
-                <span className="text-rose-700 font-extrabold">{lockedViolations[0].unlockToken}</span>
-                <button
-                  type="button"
-                  onClick={() => handleCopyViolationToken(lockedViolations[0].unlockToken, lockedViolations[0].id)}
-                  className="p-1 text-slate-500 hover:text-slate-800 rounded cursor-pointer"
-                  title="Salin Token"
-                >
-                  <Copy className="w-3.5 h-3.5" />
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={() => handleRemoteUnlock(lockedViolations[0].id, lockedViolations[0].studentName)}
+                className="px-3 py-1.5 rounded-xl bg-white hover:bg-emerald-50 text-emerald-800 border border-emerald-300 font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
+              >
+                <Check className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Tandai Sudah Dicek</span>
+              </button>
             )}
             <button
               type="button"
@@ -645,7 +658,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
               }}
               className="px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs flex items-center gap-1.5 transition-all shadow-xs cursor-pointer"
             >
-              <span>Lihat Log &amp; Buka Kunci ({lockedViolations.length}) &rarr;</span>
+              <span>Lihat Notifikasi ({lockedViolations.length}) &rarr;</span>
             </button>
           </div>
         </motion.div>
@@ -683,11 +696,11 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                 : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
             }`}
           >
-            <ShieldAlert className={`w-4 h-4 ${lockedViolations.length > 0 ? (activeTab === 'violations' ? 'text-white' : 'text-rose-600 animate-pulse') : 'text-slate-400'}`} />
+            <Bell className={`w-4 h-4 ${lockedViolations.length > 0 ? (activeTab === 'violations' ? 'text-white' : 'text-rose-600 animate-pulse') : 'text-slate-400'}`} />
             <span>Notifikasi Pelanggaran</span>
             {lockedViolations.length > 0 ? (
               <span className="px-1.5 py-0.5 rounded-full text-[10px] font-black uppercase bg-rose-500 text-white animate-pulse">
-                {lockedViolations.length} Terkunci
+                {lockedViolations.length} Baru
               </span>
             ) : (
               <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${activeTab === 'violations' ? 'bg-rose-700 text-white' : 'bg-slate-100 text-slate-600'}`}>
@@ -857,9 +870,18 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                 <span className="font-semibold">Urutkan:</span>
                 <select
                   value={sortField}
-                  onChange={(e) => setSortField(e.target.value as 'score' | 'name' | 'time')}
-                  className="py-1.5 px-2.5 rounded-lg border border-slate-300 bg-white text-xs font-semibold"
+                  onChange={(e) => {
+                    const nextField = e.target.value as 'absen' | 'score' | 'name' | 'time';
+                    setSortField(nextField);
+                    if (nextField === 'absen' || nextField === 'name') {
+                      setSortOrder('asc');
+                    } else {
+                      setSortOrder('desc');
+                    }
+                  }}
+                  className="py-1.5 px-2.5 rounded-lg border border-slate-300 bg-white text-xs font-semibold cursor-pointer"
                 >
+                  <option value="absen">No. Absen</option>
                   <option value="score">Nilai</option>
                   <option value="name">Nama Siswa</option>
                   <option value="time">Waktu Kuis</option>
@@ -867,9 +889,13 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                 <button
                   type="button"
                   onClick={() => setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc')}
-                  className="px-2 py-1.5 rounded-lg border border-slate-300 bg-slate-50 text-[11px] font-bold"
+                  className="px-2.5 py-1.5 rounded-lg border border-slate-300 bg-slate-50 hover:bg-slate-100 text-[11px] font-bold cursor-pointer transition-colors"
                 >
-                  {sortOrder === 'desc' ? 'Tertinggi' : 'Terendah'}
+                  {sortField === 'absen'
+                    ? (sortOrder === 'asc' ? '1 → Terbesar' : 'Terbesar → 1')
+                    : sortField === 'name'
+                    ? (sortOrder === 'asc' ? 'A → Z' : 'Z → A')
+                    : (sortOrder === 'desc' ? 'Tertinggi' : 'Terendah')}
                 </button>
               </div>
             </div>
@@ -954,7 +980,26 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                       <th className="py-3.5 px-4 w-12 text-center">No</th>
                       <th className="py-3.5 px-4">Nama Lengkap Siswa</th>
                       <th className="py-3.5 px-3">Kelas</th>
-                      <th className="py-3.5 px-3 text-center">Absen</th>
+                      <th
+                        onClick={() => {
+                          playClickSound();
+                          if (sortField === 'absen') {
+                            setSortOrder(prev => (prev === 'asc' ? 'desc' : 'asc'));
+                          } else {
+                            setSortField('absen');
+                            setSortOrder('asc');
+                          }
+                        }}
+                        className="py-3.5 px-3 text-center cursor-pointer hover:bg-amber-100/60 transition-colors select-none"
+                        title="Klik untuk mengurutkan berdasarkan Nomor Absen"
+                      >
+                        <div className="inline-flex items-center justify-center gap-1">
+                          <span className={sortField === 'absen' ? 'text-amber-800 font-extrabold underline underline-offset-2' : ''}>
+                            No. Absen
+                          </span>
+                          <ArrowUpDown className={`w-3 h-3 ${sortField === 'absen' ? 'text-amber-600' : 'text-slate-400'}`} />
+                        </div>
+                      </th>
                       <th className="py-3.5 px-4 text-center">Nilai Akhir</th>
                       <th className="py-3.5 px-3 text-center">Status</th>
                       <th className="py-3.5 px-4 text-center">Benar / Salah</th>
@@ -991,8 +1036,8 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                                 className="inline-flex items-center gap-1 mt-0.5 px-1.5 py-0.5 rounded bg-rose-50 hover:bg-rose-100 text-rose-700 text-[10px] font-bold border border-rose-200 cursor-pointer transition-colors"
                                 title="Lihat rincian riwayat pelanggaran siswa ini di tab Notifikasi Pelanggaran"
                               >
-                                <ShieldAlert className="w-3 h-3 text-rose-500 shrink-0" />
-                                <span>{sub.violationsCount}x Terkunci (Pindah Tab) &rarr;</span>
+                                <Bell className="w-3 h-3 text-rose-500 shrink-0" />
+                                <span>{sub.violationsCount}x Notifikasi Pelanggaran (Pindah Tab) &rarr;</span>
                               </button>
                             )}
                           </td>
@@ -1639,14 +1684,14 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-100">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center shrink-0">
-                  <ShieldAlert className="w-5 h-5" />
+                  <Bell className="w-5 h-5" />
                 </div>
                 <div>
                   <h3 className="font-bold text-slate-900 text-base sm:text-lg">
-                    Notifikasi &amp; Log Pelanggaran Anti-Curang CBT
+                    Notifikasi Pelanggaran Siswa (Khusus Akun Guru)
                   </h3>
                   <p className="text-xs text-slate-500 mt-0.5">
-                    Memantau siswa yang keluar jendela/aplikasi secara langsung. Anda dapat menyalin token pembuka atau membuka kunci kuis siswa dari sini.
+                    Memantau pemberitahuan real-time saat siswa membuka tab lain atau keluar dari jendela kuis (tanpa token penguncian di layar siswa).
                   </p>
                 </div>
               </div>
@@ -1661,7 +1706,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                   className="px-3.5 py-2 rounded-xl border border-rose-200 text-rose-700 hover:bg-rose-50 text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer self-start md:self-auto"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
-                  <span>Bersihkan Riwayat Log</span>
+                  <span>Bersihkan Semua Notifikasi</span>
                 </button>
               )}
             </div>
@@ -1670,27 +1715,27 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-4">
               <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200">
                 <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
-                  Total Kejadian
+                  Total Notifikasi Pelanggaran
                 </span>
                 <span className="text-xl sm:text-2xl font-black text-slate-800">
-                  {violations.length}
+                  {violations.length} Kejadian
                 </span>
               </div>
               <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200">
                 <span className="text-[11px] font-bold text-rose-700 uppercase tracking-wider block flex items-center gap-1.5">
                   <span className="w-2 h-2 rounded-full bg-rose-600 animate-pulse"></span>
-                  Sedang Terkunci
+                  Notifikasi Baru (Belum Dicek)
                 </span>
                 <span className="text-xl sm:text-2xl font-black text-rose-700">
-                  {lockedViolations.length} Siswa
+                  {lockedViolations.length} Notifikasi
                 </span>
               </div>
               <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200">
                 <span className="text-[11px] font-bold text-emerald-700 uppercase tracking-wider block">
-                  Telah Dibuka / Diizinkan
+                  Sudah Dicek Guru
                 </span>
                 <span className="text-xl sm:text-2xl font-black text-emerald-700">
-                  {violations.length - lockedViolations.length} Siswa
+                  {violations.length - lockedViolations.length} Notifikasi
                 </span>
               </div>
             </div>
@@ -1702,7 +1747,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                   type="text"
                   value={violationSearch}
                   onChange={(e) => setViolationSearch(e.target.value)}
-                  placeholder="Cari nama siswa, kelas, atau token..."
+                  placeholder="Cari nama siswa atau kelas..."
                   className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-300 text-xs text-slate-800 focus:border-rose-500 focus:ring-1 focus:ring-rose-200 outline-hidden"
                 />
                 <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
@@ -1711,8 +1756,8 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
               <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl">
                 {[
                   { id: 'all', label: `Semua (${violations.length})` },
-                  { id: 'locked', label: `Terkunci (${lockedViolations.length})` },
-                  { id: 'unlocked', label: `Sudah Dibuka (${violations.length - lockedViolations.length})` },
+                  { id: 'locked', label: `Belum Dicek (${lockedViolations.length})` },
+                  { id: 'unlocked', label: `Sudah Dicek (${violations.length - lockedViolations.length})` },
                 ].map((f) => (
                   <button
                     key={f.id}
@@ -1742,21 +1787,20 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
               </div>
               <h4 className="font-bold text-slate-800 text-base">
                 {violations.length === 0 
-                  ? 'Belum Ada Pelanggaran yang Terdeteksi' 
+                  ? 'Belum Ada Notifikasi Pelanggaran' 
                   : 'Tidak Ditemukan Data yang Sesuai Filter'}
               </h4>
               <p className="text-xs text-slate-500 max-w-md mx-auto mt-1">
                 {violations.length === 0
-                  ? 'Semua siswa mengerjakan ujian dengan tertib dan fokus di layar CBT tanpa membuka tab lain.'
+                  ? 'Semua siswa mengerjakan kuis dengan tertib tanpa terdeteksi keluar tab atau membuka aplikasi lain.'
                   : 'Cobalah ubah kata kunci pencarian atau ubah filter status di atas.'}
               </p>
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {filteredViolations.map((v) => {
-                const isLocked = v.status === 'locked';
-                const isCopied = copiedTokenId === v.id;
-                const isUnlocking = unlockingViolationId === v.id;
+                const isUnread = v.status === 'locked';
+                const isUpdating = unlockingViolationId === v.id;
                 const timeFormatted = new Date(v.timestamp).toLocaleTimeString('id-ID', {
                   hour: '2-digit',
                   minute: '2-digit',
@@ -1769,7 +1813,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                   <div
                     key={v.id}
                     className={`p-4 sm:p-5 rounded-2xl border transition-all ${
-                      isLocked
+                      isUnread
                         ? 'bg-rose-50/40 border-rose-300 shadow-xs ring-1 ring-rose-300'
                         : 'bg-white border-slate-200 shadow-2xs'
                     }`}
@@ -1793,55 +1837,43 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
 
                       {/* Status Badge */}
                       <span className={`px-2.5 py-1 rounded-xl text-xs font-black shrink-0 flex items-center gap-1.5 ${
-                        isLocked
+                        isUnread
                           ? 'bg-rose-600 text-white shadow-xs animate-pulse'
                           : 'bg-emerald-100 text-emerald-800 border border-emerald-300'
                       }`}>
-                        {isLocked ? (
+                        {isUnread ? (
                           <>
-                            <Lock className="w-3.5 h-3.5" />
-                            <span>Terkunci</span>
+                            <Bell className="w-3.5 h-3.5" />
+                            <span>Notifikasi Baru</span>
                           </>
                         ) : (
                           <>
                             <CheckCircle2 className="w-3.5 h-3.5" />
-                            <span>Sudah Dibuka</span>
+                            <span>Sudah Dicek</span>
                           </>
                         )}
                       </span>
                     </div>
 
-                    {/* Violation Information */}
+                    {/* Violation Information (No Token) */}
                     <div className="bg-white/80 rounded-xl p-3 border border-slate-200/80 mb-3.5 space-y-1.5 text-xs">
                       <div className="flex items-center justify-between text-slate-700">
-                        <span className="text-slate-500">Posisi Ujian:</span>
+                        <span className="text-slate-500">Posisi Soal Saat Kejadian:</span>
                         <span className="font-bold text-slate-900">
-                          Terkunci di Soal #{v.questionNumber}
+                          Soal Nomor #{v.questionNumber}
                         </span>
                       </div>
                       <div className="flex items-center justify-between text-slate-700">
-                        <span className="text-slate-500">Frekuensi:</span>
+                        <span className="text-slate-500">Frekuensi Pelanggaran:</span>
                         <span className="font-bold text-rose-700">
                           Pelanggaran ke-{v.violationCount}
                         </span>
                       </div>
-                      <div className="flex items-center justify-between text-slate-700 pt-1.5 border-t border-slate-100">
-                        <span className="text-slate-500">Token CBT Siswa:</span>
-                        <div className="flex items-center gap-1.5">
-                          <span className="font-mono font-black text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200 text-xs">
-                            {v.unlockToken}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => handleCopyViolationToken(v.unlockToken, v.id)}
-                            className={`p-1 rounded transition-colors cursor-pointer ${
-                              isCopied ? 'bg-emerald-100 text-emerald-700' : 'hover:bg-slate-100 text-slate-500'
-                            }`}
-                            title="Salin Token"
-                          >
-                            {isCopied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                          </button>
-                        </div>
+                      <div className="pt-1.5 border-t border-slate-100 text-slate-600">
+                        <span className="text-slate-500 block mb-0.5">Keterangan Aktivitas:</span>
+                        <span className="font-semibold text-slate-800">
+                          {v.reason || 'Terdeteksi membuka tab lain atau meminimalkan browser'}
+                        </span>
                       </div>
                     </div>
 
@@ -1855,36 +1887,36 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                             onDeleteViolation(v.id);
                           }}
                           className="px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer"
-                          title="Hapus log ini"
+                          title="Hapus notifikasi ini"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
-                          <span>Hapus Log</span>
+                          <span>Hapus Notifikasi</span>
                         </button>
                       )}
 
-                      {isLocked ? (
+                      {isUnread ? (
                         <button
                           type="button"
-                          disabled={isUnlocking}
+                          disabled={isUpdating}
                           onClick={() => handleRemoteUnlock(v.id, v.studentName)}
                           className="ml-auto px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold text-xs flex items-center gap-1.5 transition-all shadow-xs cursor-pointer disabled:opacity-50"
                         >
-                          {isUnlocking ? (
+                          {isUpdating ? (
                             <>
                               <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                              <span>Membuka Kunci...</span>
+                              <span>Menyimpan...</span>
                             </>
                           ) : (
                             <>
-                              <Unlock className="w-3.5 h-3.5" />
-                              <span>Buka Kunci untuk Siswa</span>
+                              <Check className="w-3.5 h-3.5" />
+                              <span>Tandai Sudah Dicek</span>
                             </>
                           )}
                         </button>
                       ) : (
                         <span className="ml-auto text-[11px] font-bold text-emerald-700 flex items-center gap-1">
                           <Check className="w-3.5 h-3.5" />
-                          <span>Ujian Sedang Dilanjutkan</span>
+                          <span>Telah Dicek Guru</span>
                         </span>
                       )}
                     </div>

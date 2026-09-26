@@ -45,7 +45,7 @@ export interface ViolationLockSession {
   answers: Record<number, 'A' | 'B' | 'C' | 'D'>;
   flagged: Record<number, boolean>;
   seconds: number;
-  unlockToken: string;
+  unlockToken?: string;
   violationCount: number;
   violationTime: string;
   reason: string;
@@ -59,7 +59,8 @@ export interface QuizViolationRecord {
   questionNumber: number; // 1-indexed (e.g. Soal 4)
   violationCount: number; // 1st violation, 2nd, etc.
   timestamp: string; // ISO string
-  unlockToken: string; // The CBT unlock token e.g. "CBT-4921"
+  unlockToken?: string;
+  reason?: string;
   status: 'locked' | 'unlocked';
   unlockedAt?: string;
 }

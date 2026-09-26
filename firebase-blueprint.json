@@ -166,17 +166,22 @@
         },
         "unlockToken": {
           "type": "string",
-          "description": "Token resmi untuk membuka kunci kuis",
+          "description": "Token opsional (tidak digunakan lagi)",
           "maxLength": 30
+        },
+        "reason": {
+          "type": "string",
+          "description": "Keterangan aktivitas pelanggaran siswa",
+          "maxLength": 200
         },
         "status": {
           "type": "string",
-          "description": "Status penguncian sesi kuis (locked atau unlocked)",
+          "description": "Status notifikasi pelanggaran (locked = belum dicek, unlocked = sudah dicek)",
           "enum": ["locked", "unlocked"]
         },
         "unlockedAt": {
           "type": "string",
-          "description": "Waktu kunci dibuka kembali"
+          "description": "Waktu notifikasi ditandai sudah dicek oleh guru"
         }
       },
       "required": [
@@ -187,7 +192,6 @@
         "questionNumber",
         "violationCount",
         "timestamp",
-        "unlockToken",
         "status"
       ]
     }

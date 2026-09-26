@@ -347,6 +347,7 @@ export function subscribeToViolations(
           violationCount: typeof data.violationCount === 'number' ? data.violationCount : 1,
           timestamp: data.timestamp || new Date().toISOString(),
           unlockToken: data.unlockToken || '',
+          reason: data.reason || 'Terdeteksi membuka tab lain atau meminimalkan browser',
           status: data.status === 'unlocked' ? 'unlocked' : 'locked',
           unlockedAt: data.unlockedAt,
         });
@@ -376,7 +377,8 @@ export async function reportViolationToFirebase(violation: QuizViolationRecord):
       questionNumber: violation.questionNumber,
       violationCount: violation.violationCount,
       timestamp: violation.timestamp,
-      unlockToken: violation.unlockToken,
+      unlockToken: violation.unlockToken || '-',
+      reason: violation.reason || 'Terdeteksi membuka tab lain atau meminimalkan browser',
       status: violation.status,
     });
   } catch (error) {

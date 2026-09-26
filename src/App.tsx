@@ -269,6 +269,7 @@ export default function App() {
   };
 
   // Triggered when a student switches tabs or minimizes the window during test
+  // Sends a real-time notification to the Teacher Dashboard without locking the student's screen or requiring a token
   const handleViolationOccurred = async (violationData: {
     lastQuestionIndex: number;
     answers: Record<number, 'A' | 'B' | 'C' | 'D'>;
@@ -277,12 +278,8 @@ export default function App() {
     reason: string;
   }) => {
     if (!currentStudent) return;
-    stopSpeech();
-    playViolationAlertSound();
 
-    // Generate a clean, official exam unlock token (e.g. CBT-7824)
     const randomCode = Math.floor(1000 + Math.random() * 9000);
-    const unlockToken = `CBT-${randomCode}`;
     const prevCount = violationSession ? violationSession.violationCount : 0;
     const violationId = `viol-${Date.now()}-${randomCode}`;
 
@@ -293,18 +290,14 @@ export default function App() {
       answers: violationData.answers,
       flagged: violationData.flagged,
       seconds: violationData.seconds,
-      unlockToken,
       violationCount: prevCount + 1,
       violationTime: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
       reason: violationData.reason,
     };
 
     setViolationSession(session);
-    try {
-      localStorage.setItem(STORAGE_KEY_VIOLATION, JSON.stringify(session));
-    } catch {}
 
-    // Report violation to Firestore immediately so teacher dashboard receives instant notification & unlock controls
+    // Report violation to Firestore immediately so teacher dashboard receives instant notification
     const violationRecord: QuizViolationRecord = {
       id: violationId,
       studentName: currentStudent.name,
@@ -313,8 +306,9 @@ export default function App() {
       questionNumber: violationData.lastQuestionIndex + 1,
       violationCount: prevCount + 1,
       timestamp: new Date().toISOString(),
-      unlockToken,
-      status: 'locked',
+      unlockToken: '-',
+      reason: violationData.reason,
+      status: 'locked', // 'locked' represents unread notification in Teacher Dashboard
     };
 
     try {
@@ -322,8 +316,6 @@ export default function App() {
     } catch (err) {
       console.warn('Could not report violation to Firebase:', err);
     }
-
-    setCurrentView('violation_locked');
   };
 
   // Remote violation management handlers for Teacher Dashboard

@@ -77,16 +77,16 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
   const [speechRate, setSpeechRate] = useState<number>(0.80);
   const [autoPlayAudio, setAutoPlayAudio] = useState<boolean>(true);
 
-  // Anti-Curang CBT state (safe toggle, disabled by default to avoid accidental locks in iframes/webviews)
-  const [antiCheatEnabled, setAntiCheatEnabled] = useState(false);
+  // Anti-Curang CBT state (sends notification to teacher dashboard when tab is switched, without locking student screen)
+  const [antiCheatEnabled, setAntiCheatEnabled] = useState(true);
 
-  // Tab-switch violation detection (Anti-Curang CBT)
+  // Tab-switch violation detection (sends notification to Teacher Dashboard)
   useEffect(() => {
     if (!antiCheatEnabled) return;
 
     const reportViolation = (reason: string) => {
       if (isSubmittedRef.current) return;
-      stopSpeech();
+      setViolationsCount(prev => prev + 1);
       onViolationOccurred?.({
         lastQuestionIndex: currentIndex,
         answers,

@@ -10,6 +10,7 @@ interface ReviewModalProps {
   studentName: string;
   score: number;
   onClose: () => void;
+  questions?: Question[];
 }
 
 export const ReviewModal: React.FC<ReviewModalProps> = ({
@@ -17,6 +18,7 @@ export const ReviewModal: React.FC<ReviewModalProps> = ({
   studentName,
   score,
   onClose,
+  questions = QUIZ_QUESTIONS,
 }) => {
   const [playingId, setPlayingId] = useState<number | null>(null);
 
@@ -79,7 +81,7 @@ export const ReviewModal: React.FC<ReviewModalProps> = ({
 
         {/* Modal Content / Questions List */}
         <div className="p-3.5 sm:p-6 overflow-y-auto space-y-4 sm:space-y-6 flex-1">
-          {QUIZ_QUESTIONS.map((q, idx) => {
+          {questions.map((q, idx) => {
             const studentAns = studentAnswers[q.id];
             const isCorrect = studentAns === q.correctAnswer;
             const isAnswered = !!studentAns;

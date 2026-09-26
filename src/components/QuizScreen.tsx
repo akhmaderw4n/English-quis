@@ -27,6 +27,7 @@ import { QUIZ_QUESTIONS, QUIZ_METADATA } from '../data/quizData';
 import { playClickSound, speakEnglish, stopSpeech } from '../utils/audio';
 
 interface QuizScreenProps {
+  questions?: Question[];
   student: StudentInfo;
   onFinishQuiz: (answers: Record<number, 'A' | 'B' | 'C' | 'D'>, timeSpentSeconds: number, violationsCount?: number) => void;
   onExitQuiz: () => void;
@@ -48,6 +49,7 @@ interface QuizScreenProps {
 }
 
 export const QuizScreen: React.FC<QuizScreenProps> = ({
+  questions = QUIZ_QUESTIONS,
   student,
   onFinishQuiz,
   onExitQuiz,
@@ -75,9 +77,12 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
   const [speechRate, setSpeechRate] = useState<number>(0.80);
   const [autoPlayAudio, setAutoPlayAudio] = useState<boolean>(true);
 
-  // Tab-switch and window-blur violation detection (Anti-Curang CBT)
+  // Anti-Curang CBT state (safe toggle, disabled by default to avoid accidental locks in iframes/webviews)
+  const [antiCheatEnabled, setAntiCheatEnabled] = useState(false);
+
+  // Tab-switch violation detection (Anti-Curang CBT)
   useEffect(() => {
-    let blurTimeout: ReturnType<typeof setTimeout> | null = null;
+    if (!antiCheatEnabled) return;
 
     const reportViolation = (reason: string) => {
       if (isSubmittedRef.current) return;
@@ -97,34 +102,12 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
       }
     };
 
-    const handleBlur = () => {
-      if (isSubmittedRef.current) return;
-      if (blurTimeout) clearTimeout(blurTimeout);
-      blurTimeout = setTimeout(() => {
-        if (!isSubmittedRef.current && (document.hidden || !document.hasFocus())) {
-          reportViolation('Terdeteksi beralih jendela atau membuka aplikasi lain');
-        }
-      }, 250);
-    };
-
-    const handleFocus = () => {
-      if (blurTimeout) {
-        clearTimeout(blurTimeout);
-        blurTimeout = null;
-      }
-    };
-
     document.addEventListener('visibilitychange', handleVisibility);
-    window.addEventListener('blur', handleBlur);
-    window.addEventListener('focus', handleFocus);
 
     return () => {
-      if (blurTimeout) clearTimeout(blurTimeout);
       document.removeEventListener('visibilitychange', handleVisibility);
-      window.removeEventListener('blur', handleBlur);
-      window.removeEventListener('focus', handleFocus);
     };
-  }, [currentIndex, answers, flagged, seconds, onViolationOccurred]);
+  }, [antiCheatEnabled, currentIndex, answers, flagged, seconds, onViolationOccurred]);
 
   // Timer
   useEffect(() => {
@@ -134,17 +117,17 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
     return () => clearInterval(timer);
   }, []);
 
-  const currentQuestion = QUIZ_QUESTIONS[currentIndex];
-  const currentAnswer = answers[currentQuestion.id];
+  const currentQuestion = (questions && questions[currentIndex]) || (questions && questions[0]) || null;
+  const currentAnswer = currentQuestion ? answers[currentQuestion.id] : undefined;
   const answeredCount = Object.keys(answers).length;
-  const isAllAnswered = answeredCount === QUIZ_QUESTIONS.length;
+  const isAllAnswered = questions.length > 0 && answeredCount === questions.length;
 
   // Auto-play audio when arriving at a question with audio enabled
   useEffect(() => {
     stopSpeech();
     setIsPlayingAudio(false);
 
-    if (currentQuestion.hasAudio && autoPlayAudio && soundOn) {
+    if (currentQuestion && currentQuestion.hasAudio && autoPlayAudio && soundOn) {
       const textToSpeak = currentQuestion.audioScript || currentQuestion.question;
       const timer = setTimeout(() => {
         setIsPlayingAudio(true);
@@ -158,7 +141,7 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
 
       return () => clearTimeout(timer);
     }
-  }, [currentIndex, autoPlayAudio, soundOn]);
+  }, [currentIndex, autoPlayAudio, soundOn, currentQuestion]);
 
   // Clean up speech when unmounting
   useEffect(() => {
@@ -238,7 +221,7 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
     playClickSound();
     stopSpeech();
     setIsPlayingAudio(false);
-    if (currentIndex < QUIZ_QUESTIONS.length - 1) {
+    if (currentIndex < questions.length - 1) {
       setCurrentIndex(currentIndex + 1);
     }
   };
@@ -277,6 +260,29 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
     const secs = totalSec % 60;
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
+
+  if (!currentQuestion) {
+    return (
+      <div className="min-h-[60vh] flex items-center justify-center p-4">
+        <div className="bg-white rounded-3xl p-8 max-w-md w-full text-center shadow-xl border border-slate-200 space-y-4">
+          <div className="w-16 h-16 rounded-2xl bg-amber-100 text-amber-600 flex items-center justify-center mx-auto">
+            <AlertCircle className="w-8 h-8" />
+          </div>
+          <h2 className="text-lg font-bold text-slate-900">Bank Soal Sedang Kosong</h2>
+          <p className="text-xs text-slate-600 leading-relaxed">
+            Saat ini belum ada butir soal yang aktif pada bank soal kuis. Silakan hubungi guru pengawas Anda untuk mengunggah atau mereset bank soal.
+          </p>
+          <button
+            type="button"
+            onClick={onExitQuiz}
+            className="w-full py-3 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs transition-colors cursor-pointer"
+          >
+            Kembali ke Halaman Depan
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="py-4 sm:py-6 max-w-5xl mx-auto px-3 sm:px-6">
@@ -332,29 +338,50 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
             </p>
           </div>
 
-          <div className="flex items-center gap-2 sm:gap-3 shrink-0 flex-wrap">
-            {/* Anti-Cheat Tab Protection Badge */}
-            <div 
-              className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl border text-[11px] sm:text-xs font-bold shadow-2xs ${
-                violationsCount > 0 
-                  ? 'bg-rose-50 text-rose-900 border-rose-200' 
-                  : 'bg-emerald-50 text-emerald-900 border-emerald-200'
+          <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0 flex-wrap">
+            {/* Anti-Cheat Tab Protection Toggle Button */}
+            <button 
+              type="button"
+              onClick={() => {
+                playClickSound();
+                setAntiCheatEnabled(prev => !prev);
+              }}
+              className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl border text-[11px] sm:text-xs font-bold shadow-2xs transition-all cursor-pointer active:scale-95 ${
+                antiCheatEnabled 
+                  ? 'bg-emerald-50 text-emerald-900 border-emerald-300 ring-1 ring-emerald-400' 
+                  : 'bg-slate-100 text-slate-600 border-slate-200 hover:bg-slate-200'
               }`}
-              title={violationsCount > 0 ? `Pernah terkunci (${violationsCount}x). Membuka tab lain akan otomatis mengunci kuis.` : 'Anti-Curang Aktif: Membuka tab lain akan otomatis mengunci aplikasi.'}
+              title={antiCheatEnabled ? 'Anti-Curang Tab AKTIF (Klik untuk nonaktifkan)' : 'Anti-Curang Tab NONAKTIF (Klik untuk aktifkan)'}
             >
-              {violationsCount > 0 ? (
-                <>
-                  <ShieldAlert className="w-3.5 h-3.5 text-rose-600 shrink-0" />
-                  <span>{violationsCount}x Terkunci</span>
-                </>
-              ) : (
+              {antiCheatEnabled ? (
                 <>
                   <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
                   <span className="hidden sm:inline">Anti-Curang:</span>
-                  <span>Proteksi Tab ON</span>
+                  <span>ON</span>
+                </>
+              ) : (
+                <>
+                  <ShieldAlert className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                  <span className="hidden sm:inline">Anti-Curang:</span>
+                  <span>OFF</span>
                 </>
               )}
-            </div>
+            </button>
+
+            {/* Exit / Return to Main Screen */}
+            <button
+              type="button"
+              onClick={() => {
+                playClickSound();
+                stopSpeech();
+                onExitQuiz();
+              }}
+              className="flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl border border-slate-200 hover:bg-slate-100 text-slate-700 text-[11px] sm:text-xs font-bold transition-all shadow-2xs cursor-pointer active:scale-95"
+              title="Kembali ke Menu Awal"
+            >
+              <RotateCcw className="w-3.5 h-3.5 text-slate-500" />
+              <span>Menu</span>
+            </button>
 
             {/* Direct Sound Toggle in Quiz Screen */}
             {onToggleSound && (
@@ -390,7 +417,7 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
 
             {/* Progress summary */}
             <div className="text-[11px] sm:text-xs font-bold px-2.5 sm:px-3 py-1.5 rounded-xl bg-amber-50 text-amber-900 border border-amber-200 shadow-2xs">
-              <span className="text-amber-700">{answeredCount}</span>/{QUIZ_QUESTIONS.length} Terjawab
+              <span className="text-amber-700">{answeredCount}</span>/{questions.length} Terjawab
             </div>
           </div>
         </div>
@@ -399,7 +426,7 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
         <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
           <div 
             className="bg-gradient-to-r from-amber-500 to-emerald-500 h-full transition-all duration-300 rounded-full"
-            style={{ width: `${(answeredCount / QUIZ_QUESTIONS.length) * 100}%` }}
+            style={{ width: `${(answeredCount / questions.length) * 100}%` }}
           />
         </div>
       </div>
@@ -408,7 +435,7 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
       <div className="bg-white rounded-2xl p-3 sm:p-4 border border-slate-200 mb-4 sm:mb-6 shadow-2xs">
         <div className="flex items-center justify-between mb-2.5 px-1">
           <span className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
-            <span>Nomor Soal ({currentIndex + 1} dari 10):</span>
+            <span>Nomor Soal ({currentIndex + 1} dari {questions.length}):</span>
           </span>
           <span className="text-[11px] text-slate-400 flex items-center gap-1">
             <Headphones className="w-3 h-3 text-amber-600" />
@@ -416,7 +443,7 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
           </span>
         </div>
         <div className="grid grid-cols-5 sm:grid-cols-10 gap-1.5 sm:gap-2">
-          {QUIZ_QUESTIONS.map((q, idx) => {
+          {questions.map((q, idx) => {
             const isCurrent = idx === currentIndex;
             const isAnswered = !!answers[q.id];
             const isFlagged = !!flagged[q.id];
@@ -713,7 +740,7 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
         </button>
 
         <div className="flex-1 sm:flex-initial flex items-center justify-end">
-          {currentIndex < QUIZ_QUESTIONS.length - 1 ? (
+          {currentIndex < questions.length - 1 ? (
             <button
               type="button"
               onClick={handleNext}
@@ -758,7 +785,7 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
               <div className="bg-slate-50 p-3.5 rounded-xl text-xs space-y-1.5 mb-5 border border-slate-200">
                 <div className="flex justify-between">
                   <span className="text-slate-600">Total Soal:</span>
-                  <span className="font-bold text-slate-800">{QUIZ_QUESTIONS.length} Soal</span>
+                  <span className="font-bold text-slate-800">{questions.length} Soal</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-slate-600">Sudah Dijawab:</span>

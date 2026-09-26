@@ -90,6 +90,7 @@ export const PrintCertificateModal: React.FC<PrintCertificateModalProps> = ({
   const handleCopySummary = () => {
     playClickSound();
     const text = `*BUKTI HASIL KUIS BAHASA INGGRIS - KELAS 7 SMP*
+Judul: *${QUIZ_METADATA.title}*
 Topik: Procedure Text (Chapter 2: Culinary and Me)
 Buku: English for Nusantara
 Guru: ${QUIZ_METADATA.branding}

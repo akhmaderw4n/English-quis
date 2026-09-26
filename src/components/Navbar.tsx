@@ -1,5 +1,5 @@
 import React from 'react';
-import { BookOpen, ShieldCheck, Volume2, VolumeX, Award, Cloud, CloudOff } from 'lucide-react';
+import { BookOpen, ShieldCheck, Volume2, VolumeX, Award, Cloud, CloudOff, FileText, RotateCcw } from 'lucide-react';
 import { QUIZ_METADATA } from '../data/quizData';
 import { ViewState } from '../types';
 
@@ -11,6 +11,8 @@ interface NavbarProps {
   onToggleSound: () => void;
   studentName?: string;
   isDbConnected?: boolean;
+  onOpenProcedureStudy?: () => void;
+  onNormalizeScreen?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -21,6 +23,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   onToggleSound,
   studentName,
   isDbConnected = true,
+  onOpenProcedureStudy,
+  onNormalizeScreen,
 }) => {
   return (
     <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-amber-200/80 shadow-xs">
@@ -28,9 +32,14 @@ export const Navbar: React.FC<NavbarProps> = ({
         {/* Brand & Title */}
         <div 
           onClick={() => {
-            if (currentView !== 'quiz' && currentView !== 'violation_locked') onNavigate('start');
+            if (currentView === 'violation_locked' && onNormalizeScreen) {
+              onNormalizeScreen();
+            } else if (currentView !== 'quiz') {
+              onNavigate('start');
+            }
           }}
-          className={`flex items-center gap-2.5 sm:gap-3 min-w-0 ${currentView !== 'quiz' && currentView !== 'violation_locked' ? 'cursor-pointer active:scale-98 transition-transform' : ''}`}
+          className="flex items-center gap-2.5 sm:gap-3 min-w-0 cursor-pointer active:scale-98 transition-transform"
+          title="Klik untuk ke Halaman Awal"
         >
           <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-br from-amber-500 to-orange-500 flex items-center justify-center text-white shadow-xs shrink-0">
             <BookOpen className="w-4 h-4 sm:w-5 sm:h-5" />
@@ -45,13 +54,37 @@ export const Navbar: React.FC<NavbarProps> = ({
               </span>
             </div>
             <h1 className="text-xs sm:text-base font-extrabold text-slate-900 leading-tight truncate">
-              Procedure Text <span className="text-amber-700 hidden sm:inline">&bull; Culinary and Me</span>
+              Introducing My self and other <span className="text-amber-700 hidden sm:inline">&bull; English for Nusantara</span>
             </h1>
           </div>
         </div>
 
         {/* Right Controls */}
         <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
+          {/* Quick Screen Normalization Button when in locked screen */}
+          {currentView === 'violation_locked' && onNormalizeScreen && (
+            <button
+              type="button"
+              onClick={onNormalizeScreen}
+              className="flex items-center gap-1 sm:gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-950 text-xs sm:text-sm font-black transition-all shadow-xs cursor-pointer active:scale-95"
+              title="Normalkan Tampilan Layar & Kembali ke Beranda"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>Normalkan Layar</span>
+            </button>
+          )}
+
+          {/* Procedure Text study material quick button */}
+          {onOpenProcedureStudy && currentView !== 'quiz' && currentView !== 'violation_locked' && (
+            <button
+              type="button"
+              onClick={onOpenProcedureStudy}
+              className="hidden lg:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 text-xs font-bold border border-amber-200 transition-colors cursor-pointer"
+            >
+              <FileText className="w-3.5 h-3.5 text-amber-600" />
+              <span>Materi Procedure Text</span>
+            </button>
+          )}
           {/* Cloud Database Sync Status */}
           <div 
             className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold border transition-all ${

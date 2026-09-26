@@ -15,7 +15,7 @@ import {
   ChevronRight,
   School
 } from 'lucide-react';
-import { QuizSubmission, StudentInfo } from '../types';
+import { QuizSubmission, StudentInfo, Question } from '../types';
 import { QUIZ_METADATA } from '../data/quizData';
 import { playCelebrationSound, playClickSound } from '../utils/audio';
 import { ReviewModal } from './ReviewModal';
@@ -27,6 +27,7 @@ interface ResultScreenProps {
   onRetakeQuiz: () => void;
   onGoHome: () => void;
   onOpenTeacherAuth: () => void;
+  questions?: Question[];
 }
 
 export const ResultScreen: React.FC<ResultScreenProps> = ({
@@ -35,6 +36,7 @@ export const ResultScreen: React.FC<ResultScreenProps> = ({
   onRetakeQuiz,
   onGoHome,
   onOpenTeacherAuth,
+  questions,
 }) => {
   const [showReview, setShowReview] = useState(false);
   const [showPrintModal, setShowPrintModal] = useState(false);
@@ -81,7 +83,7 @@ export const ResultScreen: React.FC<ResultScreenProps> = ({
         </div>
 
         <h1 className="text-xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
-          Hasil Kuis: Procedure Text
+          Hasil Kuis: Introducing My self and other
         </h1>
         <p className="text-[11px] sm:text-sm text-slate-500 mt-1">
           {QUIZ_METADATA.textbook} &bull; {QUIZ_METADATA.chapter}
@@ -229,6 +231,7 @@ export const ResultScreen: React.FC<ResultScreenProps> = ({
           studentName={student.name}
           score={submission.score}
           onClose={() => setShowReview(false)}
+          questions={questions}
         />
       )}
 

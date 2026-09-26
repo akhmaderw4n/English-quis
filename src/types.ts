@@ -65,3 +65,40 @@ export interface QuizViolationRecord {
 }
 
 export type ViewState = 'start' | 'quiz' | 'result' | 'dashboard' | 'violation_locked';
+
+export interface ProcedureTextRecipe {
+  id: string;
+  title: string;
+  category: string; // e.g. "Food Recipe", "Beverage / Drink", "Kitchen Activity"
+  servings?: string; // e.g. "3-4 porsi"
+  timeMinutes?: string; // e.g. "20 mins"
+  difficulty?: 'Mudah' | 'Sedang' | 'Mahir';
+  goal: string;
+  ingredients: string[];
+  tools: string[];
+  steps: string[];
+  languageNotes?: string;
+  audioScript?: string;
+  lastUpdated?: string;
+}
+
+export interface ProcedureStructureItem {
+  id: string;
+  title: string;
+  desc: string;
+}
+
+export interface ProcedureLanguageFeatureItem {
+  id: string;
+  name: string;
+  example: string;
+}
+
+export interface ProcedureTextConfig {
+  definition: string;
+  socialFunction: string;
+  genericStructure: ProcedureStructureItem[];
+  languageFeatures: ProcedureLanguageFeatureItem[];
+  texts: ProcedureTextRecipe[];
+  lastUpdated?: string;
+}

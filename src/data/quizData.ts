@@ -1,9 +1,10 @@
-import { Question, QuizSubmission } from '../types';
+import { Question, QuizSubmission, ProcedureTextConfig, ProcedureTextRecipe } from '../types';
 
 export const QUIZ_METADATA = {
-  title: 'Interactive English Quiz: Procedure Text',
-  chapter: 'Chapter 2: Culinary and Me',
-  unit: 'Unit 3: A Secret Recipe & Unit 1-2',
+  title: 'Interactive English Quiz: Introducing My self and other',
+  topic: 'Introducing Myself & Others / Procedure Text (Culinary and Me)',
+  chapter: 'Chapter 2: Culinary and Me & Chapter 1',
+  unit: 'Unit 3: A Secret Recipe & Self Introduction',
   textbook: 'English for Nusantara (SMP/MTs Kelas VII - Kurikulum Merdeka)',
   branding: 'Kuis by Eli Ermawati, S.Pd.',
   teacherName: 'Eli Ermawati, S.Pd.',
@@ -13,19 +14,195 @@ export const QUIZ_METADATA = {
   defaultTeacherPin: '1234',
 };
 
-export const PROCEDURE_TEXT_SUMMARY = {
+export const INITIAL_PROCEDURE_TEXT_CONFIG: ProcedureTextConfig = {
   definition: 'Procedure text is a text that gives instructions on how to do or make something through a sequence of steps.',
+  socialFunction: 'To explain to the reader or listener how to make, operate, or do something through a sequential series of actions or steps.',
   genericStructure: [
-    { title: '1. Goal / Aim', desc: 'States what will be made or done (e.g., How to Make Sweet Potato Fritters).' },
-    { title: '2. Ingredients / Materials', desc: 'Lists the food items, amounts, or ingredients needed (e.g., flour, sugar, bananas).' },
-    { title: '3. Cooking Utensils / Tools', desc: 'Equipment used during preparation (e.g., pan, spatula, knife, sieve, stove).' },
-    { title: '4. Steps / Method', desc: 'Sequential instructions using imperative verbs and sequence words.' }
+    {
+      id: 'struct-1',
+      title: '1. Goal / Aim (Tujuan)',
+      desc: 'States what is to be made or accomplished, usually written in the title (e.g., How to Make Sweet Potato Fritters).'
+    },
+    {
+      id: 'struct-2',
+      title: '2. Ingredients / Materials (Bahan-Bahan)',
+      desc: 'Lists the food items, ingredients, quantities, or materials required to complete the procedure (e.g., flour, sugar, bananas, 200 ml of water).'
+    },
+    {
+      id: 'struct-3',
+      title: '3. Cooking Utensils / Tools (Peralatan)',
+      desc: 'Lists the kitchen equipment or tools used during preparation (e.g., frying pan, spatula, knife, peeler, sieve, stove).'
+    },
+    {
+      id: 'struct-4',
+      title: '4. Steps / Method (Langkah-Langkah)',
+      desc: 'The chronological step-by-step instructions using imperative verbs (Verb 1) and sequence connectors to guide the reader.'
+    }
   ],
   languageFeatures: [
-    { name: 'Imperative Sentences (Kalimat Perintah)', example: 'Peel the bananas! / Stir the batter well!' },
-    { name: 'Action Verbs (Kata Kerja Masak)', example: 'Peel, chop, slice, pour, stir, mix, fry, boil, drain, serve' },
-    { name: 'Sequence Adverbs (Kata Penghubung Urutan)', example: 'First, Second, Next, Then, After that, Finally' }
+    {
+      id: 'feat-1',
+      name: 'Imperative Sentences (Kalimat Perintah)',
+      example: 'Peel the bananas! / Pour the oil into the pan! / Stir the batter gently!'
+    },
+    {
+      id: 'feat-2',
+      name: 'Action Verbs (Kata Kerja Aksi Memasak)',
+      example: 'Peel, chop, slice, grate, pour, stir, mix, dip, fry, boil, drain, serve'
+    },
+    {
+      id: 'feat-3',
+      name: 'Sequence Adverbs (Kata Penghubung Urutan)',
+      example: 'First, Second, Next, Then, After that, Finally'
+    },
+    {
+      id: 'feat-4',
+      name: 'Adverbials of Quantity & Manner (Keterangan Takaran & Cara)',
+      example: '2 tablespoons of sugar / fry until golden brown and crispy'
+    }
+  ],
+  texts: [
+    {
+      id: 'rec-1',
+      title: 'How to Make Sweet Potato Fritters',
+      category: 'Food Recipe (Makanan Ringan)',
+      servings: '4 porsi',
+      timeMinutes: '20 menit',
+      difficulty: 'Mudah',
+      goal: 'To make delicious and crispy sweet potato fritters for an afternoon family snack.',
+      ingredients: [
+        '2 medium sweet potatoes (ubi jalar)',
+        '1 cup of wheat flour (tepung terigu)',
+        '2 tablespoons of granulated sugar',
+        '1/2 teaspoon of salt',
+        '150 ml of clean water',
+        'Cooking oil for deep frying'
+      ],
+      tools: [
+        'Peeler or kitchen knife',
+        'Cutting board',
+        'Medium mixing bowl',
+        'Frying pan (wajan)',
+        'Spatula (sutil)',
+        'Wire sieve or strainer (saringan peniris minyak)'
+      ],
+      steps: [
+        'First, peel the sweet potatoes and wash them thoroughly with running water.',
+        'Next, cut the sweet potatoes into thin, even slices using a sharp knife.',
+        'Then, mix flour, sugar, salt, and water in a bowl to make a smooth coating batter.',
+        'After that, dip each sweet potato slice into the batter until well coated.',
+        'Next, heat cooking oil in a frying pan and fry the slices over medium heat until golden brown and crispy.',
+        'Finally, drain the excess cooking oil using a sieve and serve the sweet potato fritters while warm.'
+      ],
+      languageNotes: 'Action Verbs: peel, wash, cut, mix, dip, fry, drain, serve. Sequence words: First, Next, Then, After that, Finally.',
+      audioScript: 'How to Make Sweet Potato Fritters. First, peel the sweet potatoes and wash them thoroughly with running water. Next, cut them into thin slices and coat them with flour batter. Then, fry them in hot cooking oil until crispy. Finally, drain excess oil and serve the fritters while warm.',
+      lastUpdated: new Date().toISOString()
+    },
+    {
+      id: 'rec-2',
+      title: "Galang's Crispy Banana Fritters",
+      category: 'Food Recipe (Gorengan Tradisional)',
+      servings: '5 porsi',
+      timeMinutes: '15 menit',
+      difficulty: 'Mudah',
+      goal: 'To make crispy Indonesian fried bananas with sweet grated cheddar cheese on top.',
+      ingredients: [
+        '4 ripe bananas (pisang kepok/raja)',
+        '1 cup of all-purpose flour',
+        '1 tablespoon of white sugar',
+        '1/4 teaspoon of salt',
+        '200 ml of water',
+        'Cooking oil',
+        'Grated cheddar cheese or chocolate sprinkles (optional topping)'
+      ],
+      tools: [
+        'Frying pan',
+        'Wooden spatula',
+        'Mixing bowl',
+        'Serving plate',
+        'Cheese grater'
+      ],
+      steps: [
+        'First, peel the ripe bananas and cut each banana in half lengthwise.',
+        'Next, mix flour, water, sugar, and salt in a bowl to create a smooth, lump-free batter.',
+        'Then, dip the sliced bananas into the batter until evenly coated.',
+        'After that, fry the coated bananas in hot cooking oil until golden brown on both sides.',
+        'Finally, place the fritters on a plate and sprinkle grated cheese generously on top.'
+      ],
+      languageNotes: 'Focus on "dip into the batter" and "fry until golden brown". Imperative form starts directly with Verb 1.',
+      audioScript: "Galang's Crispy Banana Fritters. First, peel the bananas and cut each banana in half. Next, mix flour, water, and sugar to make a smooth batter. Then, dip the sliced bananas into the batter. After that, fry them in hot cooking oil until golden brown. Finally, place them on a plate and sprinkle grated cheese on top.",
+      lastUpdated: new Date().toISOString()
+    },
+    {
+      id: 'rec-3',
+      title: 'How to Make Warm Sweet Tea',
+      category: 'Beverage Recipe (Minuman Hangat)',
+      servings: '1 cangkir',
+      timeMinutes: '5 menit',
+      difficulty: 'Mudah',
+      goal: 'To prepare a warm, comforting cup of sweet black tea for breakfast.',
+      ingredients: [
+        '1 black tea bag (kantong teh celup)',
+        '2 teaspoons of granulated sugar',
+        '200 ml of hot or warm water'
+      ],
+      tools: [
+        'Ceramic tea cup or glass mug',
+        'Teaspoon for stirring',
+        'Water kettle or dispenser'
+      ],
+      steps: [
+        'First, place one tea bag into a clean cup.',
+        'Next, pour 200 ml of fresh warm water into the cup.',
+        'Then, dip the tea bag up and down several times until the water turns rich reddish-brown.',
+        'After that, add two teaspoons of sugar and stir well using a teaspoon until dissolved.',
+        'Finally, remove the tea bag from the cup and your warm sweet tea is ready to enjoy.'
+      ],
+      languageNotes: 'Verb "dip" means to put something briefly into a liquid. "Stir" means to agitate with a spoon.',
+      audioScript: 'How to Make Warm Sweet Tea. First, place the tea bag into a cup. Next, pour warm water into the cup. Then, dip the tea bag several times until the water turns reddish-brown. After that, add two teaspoons of sugar and stir well. Finally, warm sweet tea is ready to serve!',
+      lastUpdated: new Date().toISOString()
+    },
+    {
+      id: 'rec-4',
+      title: 'Special Indonesian Fried Rice (Nasi Goreng Spesial)',
+      category: 'Food Recipe (Makanan Utama)',
+      servings: '2 porsi',
+      timeMinutes: '15 menit',
+      difficulty: 'Sedang',
+      goal: 'To cook quick, savory, and fragrant Indonesian fried rice using leftover cold rice.',
+      ingredients: [
+        '2 plates of cold cooked white rice',
+        '2 eggs',
+        '2 cloves of garlic and 3 shallots (minced)',
+        '2 tablespoons of sweet soy sauce (kecap manis)',
+        '1 tablespoon of vegetable cooking oil',
+        '1/2 teaspoon of salt and pepper to taste',
+        'Fried shallots and cucumber slices for garnish'
+      ],
+      tools: [
+        'Wok or large skillet',
+        'Cooking spatula',
+        'Knife and cutting board',
+        'Stove'
+      ],
+      steps: [
+        'First, heat vegetable oil in a wok over medium heat.',
+        'Next, add minced garlic and shallots, then sauté until fragrant and lightly browned.',
+        'Then, push the aromatics aside, crack the eggs into the wok, and scramble them quickly.',
+        'After that, add the cold rice, pour sweet soy sauce, salt, and pepper, and stir-fry vigorously until evenly mixed.',
+        'Finally, turn off the heat, transfer to serving plates, and garnish with fried shallots and cucumber.'
+      ],
+      languageNotes: 'Culinary Action Verbs: heat, sauté, crack, scramble, add, pour, stir-fry, transfer, garnish.',
+      audioScript: 'Special Indonesian Fried Rice. First, heat vegetable oil in a wok. Next, add minced garlic and sauté until fragrant. Then, scramble the eggs. After that, add cold rice and sweet soy sauce, and stir-fry evenly. Finally, serve hot with fried shallots.',
+      lastUpdated: new Date().toISOString()
+    }
   ]
+};
+
+export const PROCEDURE_TEXT_SUMMARY = {
+  definition: INITIAL_PROCEDURE_TEXT_CONFIG.definition,
+  genericStructure: INITIAL_PROCEDURE_TEXT_CONFIG.genericStructure,
+  languageFeatures: INITIAL_PROCEDURE_TEXT_CONFIG.languageFeatures
 };
 
 export const QUIZ_QUESTIONS: Question[] = [

@@ -93,7 +93,7 @@
     },
     "appSettings": {
       "title": "AppSettings",
-      "description": "Pengaturan bersama aplikasi kuis termasuk PIN guru",
+      "description": "Pengaturan bersama aplikasi kuis termasuk PIN guru dan sinkronisasi bank soal",
       "type": "object",
       "properties": {
         "teacherPin": {
@@ -102,12 +102,27 @@
           "maxLength": 20,
           "minLength": 4
         },
+        "questionsJson": {
+          "type": "string",
+          "description": "Kumpulan butir soal format JSON yang tersinkronisasi lintas perangkat guru dan siswa"
+        },
+        "totalQuestions": {
+          "type": "number",
+          "description": "Jumlah butir soal aktif"
+        },
+        "procedureTextJson": {
+          "type": "string",
+          "description": "Koleksi modul materi dan teks prosedur format JSON tersinkronisasi lintas perangkat"
+        },
+        "totalTexts": {
+          "type": "number",
+          "description": "Jumlah teks prosedur aktif"
+        },
         "updatedAt": {
           "type": "string",
-          "description": "Waktu pembaruan PIN terakhir"
+          "description": "Waktu pembaruan pengaturan terakhir"
         }
-      },
-      "required": ["teacherPin"]
+      }
     },
     "violation": {
       "title": "QuizViolationRecord",

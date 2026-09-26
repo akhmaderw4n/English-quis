@@ -4,8 +4,8 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { ViewState, StudentInfo, QuizSubmission, ViolationLockSession } from './types';
-import { QUIZ_QUESTIONS, QUIZ_METADATA, INITIAL_STUDENT_SUBMISSIONS } from './data/quizData';
+import { ViewState, StudentInfo, QuizSubmission, ViolationLockSession, QuizViolationRecord, Question, ProcedureTextConfig } from './types';
+import { QUIZ_QUESTIONS, QUIZ_METADATA, INITIAL_STUDENT_SUBMISSIONS, INITIAL_PROCEDURE_TEXT_CONFIG } from './data/quizData';
 import { Navbar } from './components/Navbar';
 import { Footer } from './components/Footer';
 import { StartScreen } from './components/StartScreen';
@@ -14,6 +14,7 @@ import { ResultScreen } from './components/ResultScreen';
 import { TeacherDashboard } from './components/TeacherDashboard';
 import { TeacherPinModal } from './components/TeacherPinModal';
 import { ViolationScreen } from './components/ViolationScreen';
+import { ProcedureTextStudyModal } from './components/ProcedureTextStudyModal';
 import { isSoundEnabled, setSoundEnabled, playClickSound, stopSpeech, playViolationAlertSound } from './utils/audio';
 import {
   subscribeToSubmissions,
@@ -23,12 +24,25 @@ import {
   clearAllSubmissionsFromFirebase,
   subscribeToTeacherPin,
   saveTeacherPinToFirebase,
+  subscribeToViolations,
+  reportViolationToFirebase,
+  updateViolationStatusInFirebase,
+  deleteViolationFromFirebase,
+  clearAllViolationsFromFirebase,
+  subscribeToQuestionBank,
+  saveQuestionBankToFirebase,
+  resetQuestionBankInFirebase,
+  subscribeToProcedureText,
+  saveProcedureTextToFirebase,
+  resetProcedureTextInFirebase,
   testConnection
 } from './services/firebase';
 
 const STORAGE_KEY_SUBMISSIONS = 'en_nusantara_quiz_submissions_v1';
 const STORAGE_KEY_PIN = 'en_nusantara_teacher_pin_v1';
 const STORAGE_KEY_VIOLATION = 'en_nusantara_active_violation_v1';
+const STORAGE_KEY_QUESTIONS = 'en_nusantara_quiz_questions_v1';
+const STORAGE_KEY_PROCEDURE_TEXT = 'en_nusantara_procedure_text_v1';
 
 export default function App() {
   const [currentView, setCurrentView] = useState<ViewState>('start');
@@ -39,27 +53,55 @@ export default function App() {
   const [isDbConnected, setIsDbConnected] = useState(true);
   const [isSyncing, setIsSyncing] = useState(true);
 
-  // Active Violation Lockout state (resuming test after tab switch)
-  const [violationSession, setViolationSession] = useState<ViolationLockSession | null>(() => {
+  // Dynamic Question Bank state (defaults to 10 standard questions, supports Word imports)
+  const [questions, setQuestions] = useState<Question[]>(() => {
     try {
-      const stored = localStorage.getItem(STORAGE_KEY_VIOLATION);
+      const stored = localStorage.getItem(STORAGE_KEY_QUESTIONS);
       if (stored) {
-        return JSON.parse(stored);
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
       }
-    } catch {
-      // Ignore
+    } catch (e) {
+      console.warn('Error loading cached questions from localStorage', e);
     }
-    return null;
+    return QUIZ_QUESTIONS;
   });
+
+  // Real-time violations list for teacher dashboard monitoring
+  const [violations, setViolations] = useState<QuizViolationRecord[]>([]);
+
+  // Active Violation Lockout state
+  const [violationSession, setViolationSession] = useState<ViolationLockSession | null>(null);
   const [resumedFromViolation, setResumedFromViolation] = useState(false);
 
-  // Auto-restore locked state if browser was refreshed during lockout
-  useEffect(() => {
-    if (violationSession) {
-      if (violationSession.student && !currentStudent) {
-        setCurrentStudent(violationSession.student);
+  // Dynamic Procedure Text Material & Recipe Database state
+  const [procedureTextConfig, setProcedureTextConfig] = useState<ProcedureTextConfig>(() => {
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY_PROCEDURE_TEXT);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed && typeof parsed === 'object') {
+          return parsed;
+        }
       }
-      setCurrentView('violation_locked');
+    } catch (e) {
+      console.warn('Error loading cached procedure text from localStorage', e);
+    }
+    return INITIAL_PROCEDURE_TEXT_CONFIG;
+  });
+
+  // Student study modal state
+  const [isProcedureStudyOpen, setIsProcedureStudyOpen] = useState(false);
+
+  // Ensure normal screen view on mount (clear any stuck lockouts and exit fullscreen)
+  useEffect(() => {
+    try {
+      localStorage.removeItem(STORAGE_KEY_VIOLATION);
+    } catch {}
+    if (typeof document !== 'undefined' && document.fullscreenElement) {
+      document.exitFullscreen?.().catch(() => {});
     }
   }, []);
 
@@ -85,7 +127,7 @@ export default function App() {
     return [];
   });
 
-  // Subscribe to real-time Firestore Submissions for cross-device sync
+  // Subscribe to real-time Firestore Submissions, PIN, Questions, and Violations
   useEffect(() => {
     testConnection().then((connected) => {
       setIsDbConnected(connected);
@@ -95,7 +137,6 @@ export default function App() {
       (cloudSubmissions) => {
         setIsDbConnected(true);
         setIsSyncing(false);
-        // Cloud Firestore is the definitive single source of truth across all devices
         setSubmissions(cloudSubmissions);
         try {
           localStorage.setItem(STORAGE_KEY_SUBMISSIONS, JSON.stringify(cloudSubmissions));
@@ -116,9 +157,34 @@ export default function App() {
       }
     }, QUIZ_METADATA.defaultTeacherPin);
 
+    const unsubscribeQuestions = subscribeToQuestionBank((cloudQuestions) => {
+      if (cloudQuestions && cloudQuestions.length > 0) {
+        setQuestions(cloudQuestions);
+        try {
+          localStorage.setItem(STORAGE_KEY_QUESTIONS, JSON.stringify(cloudQuestions));
+        } catch {}
+      }
+    });
+
+    const unsubscribeViolations = subscribeToViolations((cloudViolations) => {
+      setViolations(cloudViolations);
+    });
+
+    const unsubscribeProcedureText = subscribeToProcedureText((cloudConfig) => {
+      if (cloudConfig) {
+        setProcedureTextConfig(cloudConfig);
+        try {
+          localStorage.setItem(STORAGE_KEY_PROCEDURE_TEXT, JSON.stringify(cloudConfig));
+        } catch {}
+      }
+    });
+
     return () => {
       unsubscribeSubmissions();
       unsubscribePin();
+      unsubscribeQuestions();
+      unsubscribeViolations();
+      unsubscribeProcedureText();
     };
   }, []);
 
@@ -131,6 +197,15 @@ export default function App() {
     }
   }, [submissions]);
 
+  // Persist backup questions to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY_QUESTIONS, JSON.stringify(questions));
+    } catch (e) {
+      console.error('Error saving questions to localStorage', e);
+    }
+  }, [questions]);
+
   // Persist backup PIN to localStorage
   useEffect(() => {
     try {
@@ -139,6 +214,41 @@ export default function App() {
       console.error('Error saving PIN to localStorage', e);
     }
   }, [teacherPin]);
+
+  // Persist backup procedure text to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY_PROCEDURE_TEXT, JSON.stringify(procedureTextConfig));
+    } catch (e) {
+      console.error('Error saving procedure text to localStorage', e);
+    }
+  }, [procedureTextConfig]);
+
+  // Update procedure text in memory, local storage, and Firestore
+  const handleUpdateProcedureText = async (newConfig: ProcedureTextConfig) => {
+    setProcedureTextConfig(newConfig);
+    try {
+      localStorage.setItem(STORAGE_KEY_PROCEDURE_TEXT, JSON.stringify(newConfig));
+    } catch {}
+    try {
+      await saveProcedureTextToFirebase(newConfig);
+    } catch (err) {
+      console.warn('Notice: Could not sync procedure text to Firestore:', err);
+    }
+  };
+
+  // Reset procedure text to default English for Nusantara
+  const handleResetProcedureText = async () => {
+    setProcedureTextConfig(INITIAL_PROCEDURE_TEXT_CONFIG);
+    try {
+      localStorage.setItem(STORAGE_KEY_PROCEDURE_TEXT, JSON.stringify(INITIAL_PROCEDURE_TEXT_CONFIG));
+    } catch {}
+    try {
+      await saveProcedureTextToFirebase(INITIAL_PROCEDURE_TEXT_CONFIG);
+    } catch (err) {
+      console.warn('Notice: Could not reset procedure text in Firestore:', err);
+    }
+  };
 
   // Sound toggle handler
   const handleToggleSound = () => {
@@ -159,7 +269,7 @@ export default function App() {
   };
 
   // Triggered when a student switches tabs or minimizes the window during test
-  const handleViolationOccurred = (violationData: {
+  const handleViolationOccurred = async (violationData: {
     lastQuestionIndex: number;
     answers: Record<number, 'A' | 'B' | 'C' | 'D'>;
     flagged: Record<number, boolean>;
@@ -174,8 +284,10 @@ export default function App() {
     const randomCode = Math.floor(1000 + Math.random() * 9000);
     const unlockToken = `CBT-${randomCode}`;
     const prevCount = violationSession ? violationSession.violationCount : 0;
+    const violationId = `viol-${Date.now()}-${randomCode}`;
 
     const session: ViolationLockSession = {
+      id: violationId,
       student: currentStudent,
       lastQuestionIndex: violationData.lastQuestionIndex,
       answers: violationData.answers,
@@ -192,18 +304,114 @@ export default function App() {
       localStorage.setItem(STORAGE_KEY_VIOLATION, JSON.stringify(session));
     } catch {}
 
+    // Report violation to Firestore immediately so teacher dashboard receives instant notification & unlock controls
+    const violationRecord: QuizViolationRecord = {
+      id: violationId,
+      studentName: currentStudent.name,
+      studentClass: currentStudent.studentClass,
+      studentNumber: currentStudent.studentNumber,
+      questionNumber: violationData.lastQuestionIndex + 1,
+      violationCount: prevCount + 1,
+      timestamp: new Date().toISOString(),
+      unlockToken,
+      status: 'locked',
+    };
+
+    try {
+      await reportViolationToFirebase(violationRecord);
+    } catch (err) {
+      console.warn('Could not report violation to Firebase:', err);
+    }
+
     setCurrentView('violation_locked');
+  };
+
+  // Remote violation management handlers for Teacher Dashboard
+  const handleRemoteUnlockViolation = async (violationId: string) => {
+    try {
+      await updateViolationStatusInFirebase(violationId, 'unlocked');
+    } catch (err) {
+      console.error('Error unlocking violation remotely:', err);
+    }
+  };
+
+  const handleDeleteViolation = async (violationId: string) => {
+    try {
+      await deleteViolationFromFirebase(violationId);
+    } catch (err) {
+      console.error('Error deleting violation:', err);
+    }
+  };
+
+  const handleClearAllViolations = async () => {
+    try {
+      await clearAllViolationsFromFirebase();
+    } catch (err) {
+      console.error('Error clearing all violations:', err);
+    }
+  };
+
+  // Question bank management handlers (Word import & reset)
+  const handleUpdateQuestions = async (newQuestions: Question[], mode: 'replace' | 'append') => {
+    let updated: Question[];
+    if (mode === 'append') {
+      const maxId = questions.reduce((max, q) => Math.max(max, q.id), 0);
+      const reindexed = newQuestions.map((q, idx) => ({
+        ...q,
+        id: maxId + idx + 1
+      }));
+      updated = [...questions, ...reindexed];
+    } else {
+      updated = newQuestions.map((q, idx) => ({ ...q, id: idx + 1 }));
+    }
+
+    setQuestions(updated);
+    try {
+      localStorage.setItem(STORAGE_KEY_QUESTIONS, JSON.stringify(updated));
+    } catch {}
+
+    try {
+      await saveQuestionBankToFirebase(updated);
+    } catch (err) {
+      console.warn('Could not sync question bank to Firebase:', err);
+    }
+  };
+
+  const handleResetQuestions = async () => {
+    setQuestions(QUIZ_QUESTIONS);
+    try {
+      localStorage.removeItem(STORAGE_KEY_QUESTIONS);
+    } catch {}
+
+    try {
+      await resetQuestionBankInFirebase();
+    } catch (err) {
+      console.warn('Could not reset question bank in Firebase:', err);
+    }
   };
 
   // Unlocks the exam and returns student directly to their last question number
   const handleUnlockViolation = () => {
-    if (!violationSession) return;
     try {
       localStorage.removeItem(STORAGE_KEY_VIOLATION);
     } catch {}
 
     setResumedFromViolation(true);
     setCurrentView('quiz');
+  };
+
+  // Restore screen display to normal state (exits fullscreen, clears locks, returns to home)
+  const handleNormalizeScreen = () => {
+    if (typeof document !== 'undefined' && document.fullscreenElement) {
+      document.exitFullscreen?.().catch(() => {});
+    }
+    stopSpeech();
+    setViolationSession(null);
+    setResumedFromViolation(false);
+    try {
+      localStorage.removeItem(STORAGE_KEY_VIOLATION);
+    } catch {}
+    setCurrentView('start');
   };
 
   // Finish Quiz & Record Submission to Cloud Database
@@ -215,14 +423,16 @@ export default function App() {
     if (!currentStudent) return;
 
     let correctCount = 0;
-    QUIZ_QUESTIONS.forEach(q => {
+    questions.forEach(q => {
       if (answers[q.id] === q.correctAnswer) {
         correctCount += 1;
       }
     });
 
-    const score = correctCount * QUIZ_METADATA.pointsPerQuestion;
-    const wrongCount = QUIZ_QUESTIONS.length - correctCount;
+    const score = questions.length > 0
+      ? Math.min(100, Math.round((correctCount / questions.length) * 100))
+      : 0;
+    const wrongCount = Math.max(0, questions.length - correctCount);
 
     const actualViolations = violationsCount ?? (violationSession ? violationSession.violationCount : 0);
 
@@ -232,7 +442,7 @@ export default function App() {
       studentClass: currentStudent.studentClass,
       studentNumber: currentStudent.studentNumber,
       score,
-      totalQuestions: QUIZ_QUESTIONS.length,
+      totalQuestions: questions.length,
       correctCount,
       wrongCount,
       answers,
@@ -358,26 +568,26 @@ export default function App() {
 
   return (
     <div className="min-h-screen flex flex-col bg-linear-to-b from-amber-50/40 via-white to-orange-50/20 text-slate-800">
-      {/* Navigation (Hidden during full lockout) */}
-      {currentView !== 'violation_locked' && (
-        <div className="no-print">
-          <Navbar
-            currentView={currentView}
-            onNavigate={(view) => {
-              playClickSound();
-              setCurrentView(view);
-            }}
-            onOpenTeacherAuth={() => {
-              playClickSound();
-              setIsTeacherAuthOpen(true);
-            }}
-            soundOn={soundOn}
-            onToggleSound={handleToggleSound}
-            studentName={currentStudent?.name}
-            isDbConnected={isDbConnected}
-          />
-        </div>
-      )}
+      {/* Navigation (Always visible) */}
+      <div className="no-print">
+        <Navbar
+          currentView={currentView}
+          onNavigate={(view) => {
+            playClickSound();
+            setCurrentView(view);
+          }}
+          onOpenTeacherAuth={() => {
+            playClickSound();
+            setIsTeacherAuthOpen(true);
+          }}
+          soundOn={soundOn}
+          onToggleSound={handleToggleSound}
+          studentName={currentStudent?.name}
+          isDbConnected={isDbConnected}
+          onOpenProcedureStudy={() => setIsProcedureStudyOpen(true)}
+          onNormalizeScreen={handleNormalizeScreen}
+        />
+      </div>
 
       {/* Main View Area */}
       <main className="flex-1">
@@ -385,11 +595,14 @@ export default function App() {
           <StartScreen
             onStartQuiz={handleStartQuiz}
             onOpenTeacherAuth={() => setIsTeacherAuthOpen(true)}
+            onOpenProcedureStudy={() => setIsProcedureStudyOpen(true)}
+            totalQuestions={questions.length}
           />
         )}
 
         {currentView === 'quiz' && currentStudent && (
           <QuizScreen
+            questions={questions}
             student={currentStudent}
             onFinishQuiz={handleFinishQuiz}
             onExitQuiz={() => {
@@ -413,11 +626,13 @@ export default function App() {
             session={violationSession}
             teacherPin={teacherPin}
             onUnlock={handleUnlockViolation}
+            onNormalizeScreen={handleNormalizeScreen}
           />
         )}
 
         {currentView === 'result' && latestSubmission && currentStudent && (
           <ResultScreen
+            questions={questions}
             submission={latestSubmission}
             student={currentStudent}
             onRetakeQuiz={handleRetakeQuiz}
@@ -429,6 +644,16 @@ export default function App() {
         {currentView === 'dashboard' && (
           <TeacherDashboard
             submissions={submissions}
+            violations={violations}
+            onUnlockViolationRemotely={handleRemoteUnlockViolation}
+            onDeleteViolation={handleDeleteViolation}
+            onClearAllViolations={handleClearAllViolations}
+            questions={questions}
+            onUpdateQuestions={handleUpdateQuestions}
+            onResetQuestions={handleResetQuestions}
+            procedureTextConfig={procedureTextConfig}
+            onUpdateProcedureText={handleUpdateProcedureText}
+            onResetProcedureText={handleResetProcedureText}
             currentPin={teacherPin}
             onChangePin={handleChangePin}
             onClearSubmissions={handleClearSubmissions}
@@ -443,6 +668,13 @@ export default function App() {
         )}
       </main>
 
+      {/* Student Procedure Text Study Material Modal */}
+      <ProcedureTextStudyModal
+        config={procedureTextConfig}
+        isOpen={isProcedureStudyOpen}
+        onClose={() => setIsProcedureStudyOpen(false)}
+      />
+
       {/* Teacher Authentication Modal */}
       {isTeacherAuthOpen && (
         <TeacherPinModal
@@ -452,12 +684,10 @@ export default function App() {
         />
       )}
 
-      {/* Footer with Mandatory Branding (Hidden during full lockout) */}
-      {currentView !== 'violation_locked' && (
-        <div className="no-print">
-          <Footer />
-        </div>
-      )}
+      {/* Footer with Mandatory Branding */}
+      <div className="no-print">
+        <Footer />
+      </div>
     </div>
   );
 }

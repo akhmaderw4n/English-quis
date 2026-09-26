@@ -282,7 +282,7 @@ export function generateStudentCertificateHtml(
     </div>
 
     <div class="title-badge">
-      <span>Bukti Hasil Kuis: Procedure Text</span>
+      <span>Bukti Hasil: ${QUIZ_METADATA.title}</span>
     </div>
 
     <!-- IDENTITAS PESERTA -->

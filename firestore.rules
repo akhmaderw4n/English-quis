@@ -35,8 +35,14 @@ service cloud.firestore {
     }
 
     function isValidSettings(data) {
-      return data.keys().hasAll(['teacherPin']) &&
-      data.teacherPin is string && data.teacherPin.size() >= 4 && data.teacherPin.size() <= 20;
+      return (
+        (!('teacherPin' in data) || (data.teacherPin is string && data.teacherPin.size() >= 4 && data.teacherPin.size() <= 20)) &&
+        (!('questionsJson' in data) || (data.questionsJson is string && data.questionsJson.size() < 1000000)) &&
+        (!('procedureTextJson' in data) || (data.procedureTextJson is string && data.procedureTextJson.size() < 1000000)) &&
+        (!('totalQuestions' in data) || (data.totalQuestions is number && data.totalQuestions >= 0)) &&
+        (!('totalTexts' in data) || (data.totalTexts is number && data.totalTexts >= 0)) &&
+        (!('updatedAt' in data) || (data.updatedAt is string))
+      );
     }
 
     function isValidViolation(data) {
@@ -79,7 +85,7 @@ service cloud.firestore {
     match /settings/{settingId} {
       allow read: if true;
       allow create, update: if isValidId(settingId) && isValidSettings(incoming());
-      allow delete: if false;
+      allow delete: if isValidId(settingId);
     }
 
     // Real-time violations notifications for teacher dashboard

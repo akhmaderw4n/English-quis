@@ -36,12 +36,23 @@ import {
   Clock,
   Lock,
   Unlock,
-  Bell
+  Bell,
+  FileText,
+  Upload,
+  RotateCcw,
+  Headphones,
+  Pencil,
+  Plus
 } from 'lucide-react';
-import { QuizSubmission, QuizViolationRecord } from '../types';
-import { QUIZ_QUESTIONS, QUIZ_METADATA, INITIAL_STUDENT_SUBMISSIONS } from '../data/quizData';
+import { QuizSubmission, QuizViolationRecord, Question, ProcedureTextConfig } from '../types';
+import { QUIZ_QUESTIONS, QUIZ_METADATA, INITIAL_STUDENT_SUBMISSIONS, INITIAL_PROCEDURE_TEXT_CONFIG } from '../data/quizData';
 import { ReviewModal } from './ReviewModal';
 import { TeacherInputStudent } from './TeacherInputStudent';
+import { WordImportModal } from './WordImportModal';
+import { QuestionEditModal } from './QuestionEditModal';
+import { PermanentDeleteModal } from './PermanentDeleteModal';
+import { ProcedureTextEditor } from './ProcedureTextEditor';
+import { downloadWordCompatibleDoc } from '../utils/wordQuestionParser';
 import { playClickSound, playUnlockSuccessSound } from '../utils/audio';
 import { executePrintStudentScore, executePrintTeacherRecap, openTeacherRecapInNewTab } from '../utils/printReport';
 
@@ -61,6 +72,12 @@ interface TeacherDashboardProps {
   onAddBatchSubmissions: (submissions: QuizSubmission[]) => void;
   isDbConnected?: boolean;
   isSyncing?: boolean;
+  questions?: Question[];
+  onUpdateQuestions?: (newQuestions: Question[], mode: 'replace' | 'append') => Promise<void> | void;
+  onResetQuestions?: () => Promise<void> | void;
+  procedureTextConfig?: ProcedureTextConfig;
+  onUpdateProcedureText?: (newConfig: ProcedureTextConfig) => Promise<void> | void;
+  onResetProcedureText?: () => Promise<void> | void;
 }
 
 export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
@@ -79,13 +96,36 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
   onAddBatchSubmissions,
   isDbConnected = true,
   isSyncing = false,
+  questions,
+  onUpdateQuestions,
+  onResetQuestions,
+  procedureTextConfig,
+  onUpdateProcedureText,
+  onResetProcedureText,
 }) => {
-  const [activeTab, setActiveTab] = useState<'recap' | 'input' | 'analysis' | 'bank' | 'settings' | 'violations'>('recap');
+  const [activeTab, setActiveTab] = useState<'recap' | 'input' | 'analysis' | 'bank' | 'procedure' | 'settings' | 'violations'>('recap');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedClass, setSelectedClass] = useState<string>('ALL');
   const [sortField, setSortField] = useState<'score' | 'name' | 'time'>('score');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [inspectSubmission, setInspectSubmission] = useState<QuizSubmission | null>(null);
+
+  // Question Bank / Word Import states
+  const [isWordImportOpen, setIsWordImportOpen] = useState(false);
+  const [isResetQuestionsModalOpen, setIsResetQuestionsModalOpen] = useState(false);
+  const [isResettingQuestions, setIsResettingQuestions] = useState(false);
+  const [questionBankToastMsg, setQuestionBankToastMsg] = useState<string | null>(null);
+
+  // Manual Question Bank Edit & Delete state
+  const [editingQuestion, setEditingQuestion] = useState<Question | null>(null);
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [deletingQuestion, setDeletingQuestion] = useState<Question | null>(null);
+  const [isDeletingQuestion, setIsDeletingQuestion] = useState(false);
+  const [isPermanentDeleteModalOpen, setIsPermanentDeleteModalOpen] = useState(false);
+
+  const activeQuestions = useMemo(() => {
+    return questions !== undefined ? questions : QUIZ_QUESTIONS;
+  }, [questions]);
 
   // PIN change state
   const [newPinInput, setNewPinInput] = useState('');
@@ -194,7 +234,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
 
   // Item Analysis (Analisis Butir Soal per Question)
   const itemAnalysis = useMemo(() => {
-    return QUIZ_QUESTIONS.map(q => {
+    return activeQuestions.map(q => {
       if (submissions.length === 0) {
         return { ...q, correctPct: 0, correctCount: 0, total: 0 };
       }
@@ -202,7 +242,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
       const correctPct = Math.round((correctCount / submissions.length) * 100);
       return { ...q, correctPct, correctCount, total: submissions.length };
     });
-  }, [submissions]);
+  }, [submissions, activeQuestions]);
 
   // Export to CSV with UTF-8 BOM
   const handleExportCSV = () => {
@@ -218,13 +258,13 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
 
     // Headers
     csvContent += `No,Nama Siswa,Kelas,No Absen,Nilai Akhir,Status Kelulusan,Benar,Salah,Durasi (Detik),Tanggal Pengerjaan,` +
-      QUIZ_QUESTIONS.map(q => `Soal ${q.id} (${q.correctAnswer})`).join(',') + '\n';
+      activeQuestions.map(q => `Soal ${q.id} (${q.correctAnswer})`).join(',') + '\n';
 
     // Data rows
     filteredSubmissions.forEach((s, idx) => {
       const status = s.score >= QUIZ_METADATA.passingScore ? 'TUNTAS' : 'BELUM TUNTAS';
       const dateStr = new Date(s.submittedAt).toLocaleString('id-ID');
-      const questionAnswers = QUIZ_QUESTIONS.map(q => s.answers[q.id] || '-').join(',');
+      const questionAnswers = activeQuestions.map(q => s.answers[q.id] || '-').join(',');
       csvContent += `${idx + 1},"${s.studentName}","${s.studentClass}","${s.studentNumber}",${s.score},"${status}",${s.correctCount},${s.wrongCount},${s.timeSpentSeconds},"${dateStr}",${questionAnswers}\n`;
     });
 
@@ -320,6 +360,116 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     }
   };
 
+  const handleConfirmResetQuestions = async () => {
+    if (!onResetQuestions) return;
+    setIsResettingQuestions(true);
+    try {
+      await onResetQuestions();
+      setIsResetQuestionsModalOpen(false);
+      setQuestionBankToastMsg('Bank soal berhasil di-reset ke 10 soal standar buku English for Nusantara.');
+      setTimeout(() => setQuestionBankToastMsg(null), 4000);
+    } catch (err) {
+      console.error('Error resetting questions:', err);
+    } finally {
+      setIsResettingQuestions(false);
+    }
+  };
+
+  // Handlers for Question Edit and Delete
+  const handleStartEditQuestion = (q: Question) => {
+    playClickSound();
+    setEditingQuestion(q);
+    setIsEditModalOpen(true);
+  };
+
+  const handleStartCreateQuestion = () => {
+    playClickSound();
+    setEditingQuestion(null);
+    setIsEditModalOpen(true);
+  };
+
+  const handleSaveQuestion = async (savedQuestion: Question) => {
+    if (!onUpdateQuestions) return;
+
+    let updatedList: Question[];
+    const exists = activeQuestions.some(q => q.id === savedQuestion.id);
+
+    if (exists) {
+      updatedList = activeQuestions.map(q => (q.id === savedQuestion.id ? savedQuestion : q));
+    } else {
+      const newId = activeQuestions.length + 1;
+      updatedList = [...activeQuestions, { ...savedQuestion, id: newId }];
+    }
+
+    await onUpdateQuestions(updatedList, 'replace');
+    const msg = exists
+      ? `Soal nomor ${savedQuestion.id} berhasil diperbarui secara permanen!`
+      : `Soal baru nomor ${updatedList.length} berhasil ditambahkan secara permanen!`;
+    setQuestionBankToastMsg(msg);
+    setTimeout(() => setQuestionBankToastMsg(null), 4500);
+  };
+
+  const handlePromptDeleteQuestion = (q: Question) => {
+    playClickSound();
+    setDeletingQuestion(q);
+  };
+
+  const handleConfirmDeleteQuestion = async () => {
+    if (!deletingQuestion || !onUpdateQuestions) return;
+
+    setIsDeletingQuestion(true);
+    try {
+      const deletedId = deletingQuestion.id;
+      const remaining = activeQuestions
+        .filter(q => q.id !== deletedId)
+        .map((q, idx) => ({
+          ...q,
+          id: idx + 1,
+        }));
+
+      await onUpdateQuestions(remaining, 'replace');
+      playUnlockSuccessSound();
+      setDeletingQuestion(null);
+      setQuestionBankToastMsg(`Soal nomor ${deletedId} berhasil dihapus secara permanen dari bank soal.`);
+      setTimeout(() => setQuestionBankToastMsg(null), 4500);
+    } catch (err) {
+      console.error('Error deleting question:', err);
+      alert('Gagal menghapus soal. Silakan coba kembali.');
+    } finally {
+      setIsDeletingQuestion(false);
+    }
+  };
+
+  // Menu Hapus Permanen handlers (Batch & Wipe All)
+  const handleDeleteSelectedQuestions = async (selectedIds: number[]) => {
+    if (!onUpdateQuestions) return;
+    const remaining = activeQuestions
+      .filter((q) => !selectedIds.includes(q.id))
+      .map((q, idx) => ({
+        ...q,
+        id: idx + 1,
+      }));
+
+    await onUpdateQuestions(remaining, 'replace');
+    setQuestionBankToastMsg(`${selectedIds.length} butir soal berhasil dihapus secara permanen dari bank soal.`);
+    setTimeout(() => setQuestionBankToastMsg(null), 4500);
+  };
+
+  const handleClearAllQuestions = async (resetToDefault: boolean) => {
+    if (resetToDefault) {
+      if (onResetQuestions) {
+        await onResetQuestions();
+      }
+      setQuestionBankToastMsg('Bank soal berhasil di-reset permanen ke 10 butir soal standar.');
+    } else {
+      if (onUpdateQuestions) {
+        await onUpdateQuestions([], 'replace');
+      }
+      setQuestionBankToastMsg('Seluruh butir bank soal berhasil dikosongkan secara permanen (0 butir).');
+    }
+    setTimeout(() => setQuestionBankToastMsg(null), 4500);
+  };
+
   return (
     <div className="py-4 sm:py-8 max-w-6xl mx-auto px-3.5 sm:px-6">
       {/* Top Banner */}
@@ -353,7 +503,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
             Dashboard Guru: Rekap &amp; Penilaian
           </h1>
           <p className="text-xs sm:text-sm text-slate-400 mt-1 max-w-2xl">
-            Materi: <strong>Procedure Text (Culinary and Me)</strong> &bull; Buku Siswa <em>English for Nusantara</em> Kelas 7 SMP
+            Kuis: <strong>Interactive English Quiz: Introducing My self and other</strong> &bull; Materi <strong>Procedure Text (Culinary and Me)</strong> &bull; Buku Siswa <em>English for Nusantara</em> Kelas 7 SMP
           </p>
         </div>
 
@@ -596,7 +746,34 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
             }`}
           >
             <BookOpen className="w-4 h-4" />
-            <span>Kisi-kisi &amp; Kunci</span>
+            <span>Bank Soal ({activeQuestions.length})</span>
+            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-black uppercase ${
+              activeTab === 'bank' ? 'bg-amber-600 text-white' : 'bg-amber-100 text-amber-900'
+            }`}>
+              Word
+            </span>
+          </button>
+
+          {/* Edit Procedure Text Tab Button */}
+          <button
+            type="button"
+            onClick={() => {
+              playClickSound();
+              setActiveTab('procedure');
+            }}
+            className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-1.5 sm:gap-2 transition-all cursor-pointer shrink-0 whitespace-nowrap ${
+              activeTab === 'procedure'
+                ? 'bg-amber-500 text-white shadow-xs'
+                : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+            }`}
+          >
+            <FileText className="w-4 h-4" />
+            <span>Edit Procedure Text</span>
+            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-black uppercase ${
+              activeTab === 'procedure' ? 'bg-amber-600 text-white' : 'bg-amber-100 text-amber-900'
+            }`}>
+              {(procedureTextConfig?.texts || INITIAL_PROCEDURE_TEXT_CONFIG.texts).length} Teks
+            </span>
           </button>
 
           <button
@@ -989,58 +1166,356 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
         </div>
       )}
 
-      {/* Tab 3: KISI-KISI & KUNCI SOAL */}
+      {/* Tab 3: KISI-KISI & BANK SOAL (WORD IMPORT) */}
       {activeTab === 'bank' && (
-        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-2xs space-y-6">
-          <div className="border-b border-slate-100 pb-4">
-            <h3 className="font-bold text-base text-slate-900">
-              Kisi-kisi &amp; Capaian Pembelajaran (CP Fase D)
-            </h3>
-            <p className="text-xs text-slate-500 mt-1">
-              Penyusunan instrumen tes mengacu pada Kurikulum Merdeka SMP Kelas 7, Mata Pelajaran Bahasa Inggris, Buku <em>English for Nusantara</em>, Chapter 2 (Culinary and Me).
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-            <div className="p-4 rounded-xl bg-amber-50/70 border border-amber-200">
-              <h4 className="font-bold text-amber-900 mb-1.5">Tujuan Pembelajaran (Learning Objectives):</h4>
-              <ul className="list-disc pl-4 space-y-1 text-slate-700">
-                <li>Mengidentifikasi fungsi sosial teks prosedur (to explain how to make/do something).</li>
-                <li>Menentukan struktur teks resep makanan (Goal, Ingredients, Tools, Steps).</li>
-                <li>Mengenali kosakata peralatan dapur (cooking utensils: pan, spatula, sieve, peeler).</li>
-                <li>Menganalisis kata kerja instruksi (action verbs: peel, slice, pour, stir, fry, drain).</li>
-                <li>Menggunakan kata penghubung urutan waktu (sequence adverbs: first, then, finally).</li>
-              </ul>
-            </div>
-
-            <div className="p-4 rounded-xl bg-blue-50/70 border border-blue-200">
-              <h4 className="font-bold text-blue-900 mb-1.5">Karakteristik Teks Rujukan Buku:</h4>
-              <p className="text-slate-700 leading-relaxed">
-                Teks resep dan latihan diambil langsung dari konteks Unit 1 (My Favorite Food), Unit 2 (My Favorite Snack - Galang's Banana Fritters), dan Unit 3 (A Secret Recipe - Sweet Potato Fritters &amp; Warm Sweet Tea) pada buku siswa resmi.
-              </p>
-            </div>
-          </div>
-
-          <div className="space-y-4 pt-2">
-            <h4 className="font-bold text-sm text-slate-800">Daftar 10 Soal &amp; Kunci Jawaban Lengkap:</h4>
-            {QUIZ_QUESTIONS.map((q, idx) => (
-              <div key={q.id} className="p-3.5 rounded-xl border border-slate-200 text-xs">
-                <div className="flex items-center justify-between gap-2 mb-1.5">
-                  <span className="font-bold text-slate-900">
-                    Soal {idx + 1}. {q.topic}
-                  </span>
-                  <span className="px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-800 font-bold">
-                    Kunci: {q.correctAnswer}
-                  </span>
+        <div className="space-y-6">
+          {/* Quick Word Import Hero Action Banner */}
+          <div className="bg-gradient-to-r from-amber-500 via-amber-600 to-orange-600 rounded-3xl p-5 sm:p-7 text-white shadow-lg relative overflow-hidden">
+            <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-5">
+              <div className="space-y-2 max-w-xl">
+                <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/20 backdrop-blur-xs text-amber-100 font-bold text-xs border border-white/30">
+                  <FileText className="w-3.5 h-3.5" />
+                  <span>Fitur Guru: Import Bank Soal Format Word (.docx)</span>
                 </div>
-                <p className="text-slate-700 mb-2">{q.question}</p>
-                <p className="text-slate-500 italic bg-slate-50 p-2 rounded-lg border border-slate-100">
-                  Pembahasan: {q.explanation}
+                <h3 className="text-xl sm:text-2xl font-black tracking-tight leading-snug">
+                  Kelola &amp; Masukkan Soal Langsung dari Dokumen Word
+                </h3>
+                <p className="text-xs sm:text-sm text-amber-100 leading-relaxed">
+                  Guru dapat mengunggah file <strong>.docx</strong> atau menyalin teks soal ujian. Sistem otomatis mengenali nomor soal, pilihan A-D, kunci jawaban (KUNCI: A/B/C/D), pembahasan, dan audio listening.
+                </p>
+                <div className="flex items-center gap-3 pt-1 text-xs text-amber-200">
+                  <span className="font-bold bg-black/20 px-2.5 py-1 rounded-lg border border-white/20">
+                    Total Soal Aktif: {activeQuestions.length} Butir
+                  </span>
+                  {activeQuestions !== QUIZ_QUESTIONS && (
+                    <span className="bg-emerald-500/30 text-emerald-100 px-2.5 py-1 rounded-lg border border-emerald-300/40 font-bold flex items-center gap-1">
+                      <CheckCircle2 className="w-3.5 h-3.5" /> Custom Bank Soal Aktif
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex flex-col sm:flex-row md:flex-col gap-2.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    playClickSound();
+                    setIsWordImportOpen(true);
+                  }}
+                  className="px-5 py-3 rounded-2xl bg-white text-amber-900 hover:bg-amber-50 font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-md hover:shadow-lg active:scale-95 transition-all cursor-pointer"
+                >
+                  <Upload className="w-4 h-4 text-amber-600" />
+                  <span>Import Bank Soal (Word)</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleStartCreateQuestion}
+                  className="px-4 py-2.5 rounded-2xl bg-amber-700/90 hover:bg-amber-700 text-white font-bold text-xs flex items-center justify-center gap-2 border border-white/20 active:scale-95 transition-all cursor-pointer"
+                >
+                  <Plus className="w-4 h-4 text-amber-200" />
+                  <span>+ Tambah Soal Manual</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    playClickSound();
+                    setIsPermanentDeleteModalOpen(true);
+                  }}
+                  className="px-4 py-2.5 rounded-2xl bg-rose-600/90 hover:bg-rose-600 text-white font-bold text-xs flex items-center justify-center gap-2 border border-rose-400/40 active:scale-95 transition-all cursor-pointer shadow-md hover:shadow-lg"
+                >
+                  <Trash2 className="w-4 h-4 text-rose-200" />
+                  <span>Menu Hapus Permanen</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    playClickSound();
+                    downloadWordCompatibleDoc(activeQuestions, 'Bank_Soal_English_for_Nusantara');
+                  }}
+                  className="px-4 py-2.5 rounded-2xl bg-amber-800/80 hover:bg-amber-800 text-white font-bold text-xs flex items-center justify-center gap-2 border border-white/20 active:scale-95 transition-all cursor-pointer"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>Unduh Dokumen Word (.doc)</span>
+                </button>
+
+                {activeQuestions !== QUIZ_QUESTIONS && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      playClickSound();
+                      setIsResetQuestionsModalOpen(true);
+                    }}
+                    className="px-4 py-2.5 rounded-2xl bg-black/30 hover:bg-black/40 text-rose-100 font-bold text-xs flex items-center justify-center gap-2 border border-rose-300/30 active:scale-95 transition-all cursor-pointer"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>Reset ke Soal Standar</span>
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Kisi-kisi Card */}
+          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-2xs space-y-6">
+            <div className="border-b border-slate-100 pb-4 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="font-bold text-base text-slate-900">
+                  Kisi-kisi &amp; Capaian Pembelajaran (CP Fase D)
+                </h3>
+                <p className="text-xs text-slate-500 mt-1">
+                  Penyusunan instrumen tes mengacu pada Kurikulum Merdeka SMP Kelas 7, Mata Pelajaran Bahasa Inggris, Buku <em>English for Nusantara</em>, Chapter 2 (Culinary and Me).
                 </p>
               </div>
-            ))}
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleStartCreateQuestion}
+                  className="px-3.5 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Tambah Soal Baru</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    playClickSound();
+                    setIsWordImportOpen(true);
+                  }}
+                  className="px-3 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  <Upload className="w-3.5 h-3.5" />
+                  <span>Import File Word</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    playClickSound();
+                    setIsPermanentDeleteModalOpen(true);
+                  }}
+                  className="px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs"
+                >
+                  <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                  <span>Menu Hapus Permanen</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+              <div className="p-4 rounded-xl bg-amber-50/70 border border-amber-200">
+                <h4 className="font-bold text-amber-900 mb-1.5">Tujuan Pembelajaran (Learning Objectives):</h4>
+                <ul className="list-disc pl-4 space-y-1 text-slate-700">
+                  <li>Mengidentifikasi fungsi sosial teks prosedur (to explain how to make/do something).</li>
+                  <li>Menentukan struktur teks resep makanan (Goal, Ingredients, Tools, Steps).</li>
+                  <li>Mengenali kosakata peralatan dapur (cooking utensils: pan, spatula, sieve, peeler).</li>
+                  <li>Menganalisis kata kerja instruksi (action verbs: peel, slice, pour, stir, fry, drain).</li>
+                  <li>Menggunakan kata penghubung urutan waktu (sequence adverbs: first, then, finally).</li>
+                </ul>
+              </div>
+
+              <div className="p-4 rounded-xl bg-blue-50/70 border border-blue-200">
+                <h4 className="font-bold text-blue-900 mb-1.5">Karakteristik Teks Rujukan Buku:</h4>
+                <p className="text-slate-700 leading-relaxed">
+                  Teks resep dan latihan diambil langsung dari konteks Unit 1 (My Favorite Food), Unit 2 (My Favorite Snack - Galang's Banana Fritters), dan Unit 3 (A Secret Recipe - Sweet Potato Fritters &amp; Warm Sweet Tea) pada buku siswa resmi.
+                </p>
+              </div>
+            </div>
+
+            {/* List of Active Questions */}
+            <div className="space-y-4 pt-2">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <h4 className="font-bold text-sm text-slate-800">
+                    Daftar {activeQuestions.length} Soal &amp; Kunci Jawaban Lengkap:
+                  </h4>
+                  <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 font-bold text-[11px]">
+                    {activeQuestions.length} Butir
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={handleStartCreateQuestion}
+                    className="px-3 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5 text-amber-700" />
+                    <span>+ Tambah Soal Manual</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      playClickSound();
+                      setIsPermanentDeleteModalOpen(true);
+                    }}
+                    className="px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                    <span>Hapus Permanen Massal</span>
+                  </button>
+                  <span className="text-xs text-slate-500 hidden md:inline">
+                    Kunci jawaban ditandai warna hijau
+                  </span>
+                </div>
+              </div>
+
+              {activeQuestions.length === 0 ? (
+                <div className="p-8 sm:p-12 text-center rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50/50 space-y-4">
+                  <div className="w-14 h-14 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center mx-auto">
+                    <Trash2 className="w-7 h-7" />
+                  </div>
+                  <div>
+                    <h4 className="font-bold text-base text-slate-800">Bank Soal Saat Ini Kosong (0 Butir)</h4>
+                    <p className="text-xs text-slate-500 max-w-md mx-auto mt-1 leading-relaxed">
+                      Semua butir soal telah dihapus permanen. Anda dapat mengimpor bank soal dari file Word, menambahkan butir soal manual, atau mengembalikan ke 10 soal standar kurikulum.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center justify-center gap-2.5 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setIsWordImportOpen(true)}
+                      className="px-4 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-2xs cursor-pointer"
+                    >
+                      <Upload className="w-4 h-4" />
+                      <span>Import Bank Soal (Word)</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleStartCreateQuestion}
+                      className="px-4 py-2.5 rounded-xl bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                    >
+                      <Plus className="w-4 h-4 text-amber-600" />
+                      <span>+ Tambah Soal Manual</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsResetQuestionsModalOpen(true)}
+                      className="px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <RotateCcw className="w-4 h-4 text-slate-600" />
+                      <span>Kembalikan ke 10 Soal Standar</span>
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                activeQuestions.map((q, idx) => (
+                <div key={q.id} className="p-4 rounded-2xl border border-slate-200 bg-white hover:border-amber-300 transition-colors text-xs space-y-3 shadow-2xs">
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="w-6 h-6 rounded-lg bg-amber-600 text-white font-black text-xs flex items-center justify-center shrink-0">
+                        {idx + 1}
+                      </span>
+                      <span className="font-bold text-slate-900">
+                        {q.topic}
+                      </span>
+                      {q.hasAudio && (
+                        <span className="px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 font-bold flex items-center gap-1 text-[10px]">
+                          <Headphones className="w-3 h-3 text-amber-700" />
+                          <span>Audio Listening</span>
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span className="px-2.5 py-1 rounded-lg bg-emerald-100 text-emerald-800 font-black text-xs border border-emerald-200">
+                        Kunci: {q.correctAnswer}
+                      </span>
+
+                      {/* Tombol Tanda Pensil Edit Soal */}
+                      <button
+                        type="button"
+                        onClick={() => handleStartEditQuestion(q)}
+                        className="px-2.5 py-1 rounded-lg bg-amber-50 hover:bg-amber-100 active:bg-amber-200 text-amber-900 border border-amber-300 font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs"
+                        title={`Edit Soal Nomor ${idx + 1}`}
+                      >
+                        <Pencil className="w-3.5 h-3.5 text-amber-700" />
+                        <span>Edit</span>
+                      </button>
+
+                      {/* Tombol Hapus Permanen */}
+                      <button
+                        type="button"
+                        onClick={() => handlePromptDeleteQuestion(q)}
+                        className="px-2.5 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 active:bg-rose-200 text-rose-700 border border-rose-200 font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs"
+                        title={`Hapus Soal Nomor ${idx + 1} Secara Permanen`}
+                      >
+                        <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                        <span>Hapus Permanen</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {q.contextText && (
+                    <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-slate-700">
+                      <span className="font-bold text-slate-900 block mb-1">
+                        {q.contextTitle || 'Teks Rujukan:'}
+                      </span>
+                      <p className="whitespace-pre-wrap text-[11px] leading-relaxed text-slate-600">
+                        {q.contextText}
+                      </p>
+                    </div>
+                  )}
+
+                  <p className="text-slate-800 font-semibold text-xs leading-relaxed">
+                    {q.question}
+                  </p>
+
+                  {/* Options List */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                    {q.options.map(opt => {
+                      const isCorrect = opt.key === q.correctAnswer;
+                      return (
+                        <div
+                          key={opt.key}
+                          className={`p-2.5 rounded-xl border flex items-center gap-2 transition-all ${
+                            isCorrect
+                              ? 'bg-emerald-50/80 border-emerald-300 text-emerald-950 font-bold shadow-2xs'
+                              : 'bg-slate-50/60 border-slate-200 text-slate-700'
+                          }`}
+                        >
+                          <span
+                            className={`w-6 h-6 rounded-lg flex items-center justify-center font-bold text-xs shrink-0 ${
+                              isCorrect
+                                ? 'bg-emerald-600 text-white shadow-2xs'
+                                : 'bg-slate-200 text-slate-600'
+                            }`}
+                          >
+                            {opt.key}
+                          </span>
+                          <span className="text-xs leading-snug">{opt.text}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <p className="text-slate-500 italic bg-slate-50 p-2.5 rounded-xl border border-slate-100">
+                    <strong className="not-italic text-slate-700 font-semibold">Pembahasan:</strong> {q.explanation}
+                  </p>
+                </div>
+              )))}
+            </div>
           </div>
         </div>
+      )}
+
+      {/* Tab: EDIT PROCEDURE TEXT */}
+      {activeTab === 'procedure' && (
+        <ProcedureTextEditor
+          config={procedureTextConfig || INITIAL_PROCEDURE_TEXT_CONFIG}
+          onSaveConfig={onUpdateProcedureText || (() => {})}
+          onResetToDefault={onResetProcedureText || (() => {})}
+          onAddQuestionToBank={async (q) => {
+            if (onUpdateQuestions) {
+              const newQuestions = [...activeQuestions, { ...q, id: activeQuestions.length + 1 }];
+              await onUpdateQuestions(newQuestions, 'replace');
+            }
+          }}
+          isDbConnected={isDbConnected}
+        />
       )}
 
       {/* Tab 4: PENGATURAN PIN & DATABASE CLOUD */}
@@ -1633,6 +2108,184 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
           >
             <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
             <span>{deleteToast}</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Word Question Import Modal */}
+      <WordImportModal
+        isOpen={isWordImportOpen}
+        onClose={() => setIsWordImportOpen(false)}
+        currentQuestionCount={activeQuestions.length}
+        onApplyQuestions={async (newQuestions, mode) => {
+          if (onUpdateQuestions) {
+            await onUpdateQuestions(newQuestions, mode);
+            const msg = mode === 'replace'
+              ? `Berhasil memperbarui bank soal dengan ${newQuestions.length} butir soal dari dokumen Word!`
+              : `Berhasil menambahkan ${newQuestions.length} butir soal baru ke bank soal!`;
+            setQuestionBankToastMsg(msg);
+            setTimeout(() => setQuestionBankToastMsg(null), 5000);
+          }
+        }}
+      />
+
+      {/* Modal: Edit / Tambah Soal Manual (Tanda Pensil) */}
+      <QuestionEditModal
+        isOpen={isEditModalOpen}
+        question={editingQuestion}
+        totalQuestions={activeQuestions.length}
+        onSave={handleSaveQuestion}
+        onClose={() => {
+          setIsEditModalOpen(false);
+          setEditingQuestion(null);
+        }}
+      />
+
+      {/* Modal: Menu Hapus Permanen Bank Soal (Batch & Wipe All) */}
+      <PermanentDeleteModal
+        isOpen={isPermanentDeleteModalOpen}
+        questions={activeQuestions}
+        currentPin={currentPin}
+        onDeleteSelected={handleDeleteSelectedQuestions}
+        onClearAll={handleClearAllQuestions}
+        onClose={() => setIsPermanentDeleteModalOpen(false)}
+      />
+
+      {/* Modal: Hapus Soal Secara Permanen di Setiap Butir Soal */}
+      <AnimatePresence>
+        {deletingQuestion && (
+          <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200"
+            >
+              <div className="w-12 h-12 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center mb-4">
+                <Trash2 className="w-6 h-6" />
+              </div>
+
+              <h3 className="text-lg font-bold text-slate-900 mb-1">
+                Hapus Soal Nomor {deletingQuestion.id} Permanen?
+              </h3>
+
+              <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 my-3 text-xs text-slate-700">
+                <p className="font-semibold text-slate-900 mb-1 line-clamp-2">
+                  "{deletingQuestion.question}"
+                </p>
+                <span className="text-[11px] text-slate-500">
+                  Topik: {deletingQuestion.topic} • Kunci: {deletingQuestion.correctAnswer}
+                </span>
+              </div>
+
+              <p className="text-xs text-slate-600 leading-relaxed mb-4">
+                Soal ini akan dihapus secara <strong>permanen</strong> dari Cloud Firestore dan cache lokal. Urutan nomor butir soal lainnya akan otomatis disesuaikan secara berurutan.
+              </p>
+
+              <div className="flex items-center justify-end gap-2.5">
+                <button
+                  type="button"
+                  disabled={isDeletingQuestion}
+                  onClick={() => {
+                    playClickSound();
+                    setDeletingQuestion(null);
+                  }}
+                  className="px-4 py-2.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-100 transition-colors disabled:opacity-50 cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  disabled={isDeletingQuestion}
+                  onClick={handleConfirmDeleteQuestion}
+                  className="px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-xs font-bold text-white shadow-sm flex items-center gap-2 transition-colors disabled:opacity-50 cursor-pointer"
+                >
+                  {isDeletingQuestion ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Menghapus Permanen...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 className="w-4 h-4" />
+                      <span>Ya, Hapus Permanen</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Modal: Reset Bank Soal ke Standar */}
+      <AnimatePresence>
+        {isResetQuestionsModalOpen && (
+          <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200"
+            >
+              <div className="w-12 h-12 rounded-2xl bg-amber-100 text-amber-600 flex items-center justify-center mb-4">
+                <RotateCcw className="w-6 h-6" />
+              </div>
+
+              <h3 className="text-lg font-bold text-slate-900 mb-1">
+                Reset Bank Soal ke Standar?
+              </h3>
+              <p className="text-xs text-slate-600 leading-relaxed mb-4">
+                Bank soal aktif akan dikembalikan ke <strong>10 butir soal asli Kurikulum Merdeka (English for Nusantara Chapter 2: Culinary and Me)</strong>. Perubahan ini juga akan disinkronisasikan ke seluruh siswa secara otomatis.
+              </p>
+
+              <div className="flex items-center justify-end gap-2.5">
+                <button
+                  type="button"
+                  disabled={isResettingQuestions}
+                  onClick={() => {
+                    playClickSound();
+                    setIsResetQuestionsModalOpen(false);
+                  }}
+                  className="px-4 py-2.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-100 transition-colors disabled:opacity-50 cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  disabled={isResettingQuestions}
+                  onClick={handleConfirmResetQuestions}
+                  className="px-4 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 active:bg-amber-800 text-xs font-bold text-white shadow-sm flex items-center gap-2 transition-colors disabled:opacity-50 cursor-pointer"
+                >
+                  {isResettingQuestions ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Mereset Soal...</span>
+                    </>
+                  ) : (
+                    <>
+                      <RotateCcw className="w-4 h-4" />
+                      <span>Ya, Kembalikan ke Standar</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Question Bank Floating Toast */}
+      <AnimatePresence>
+        {questionBankToastMsg && (
+          <motion.div
+            initial={{ opacity: 0, y: 30, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 30, scale: 0.95 }}
+            className="fixed bottom-20 right-6 z-50 bg-amber-900 text-white px-5 py-3.5 rounded-2xl shadow-2xl border border-amber-700 flex items-center gap-3 text-xs font-semibold max-w-md"
+          >
+            <CheckCircle2 className="w-5 h-5 text-amber-400 shrink-0" />
+            <span className="leading-snug">{questionBankToastMsg}</span>
           </motion.div>
         )}
       </AnimatePresence>

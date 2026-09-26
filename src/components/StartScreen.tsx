@@ -19,11 +19,15 @@ import { playClickSound } from '../utils/audio';
 interface StartScreenProps {
   onStartQuiz: (student: StudentInfo) => void;
   onOpenTeacherAuth?: () => void;
+  onOpenProcedureStudy?: () => void;
+  totalQuestions?: number;
 }
 
 export const StartScreen: React.FC<StartScreenProps> = ({
   onStartQuiz,
   onOpenTeacherAuth,
+  onOpenProcedureStudy,
+  totalQuestions = 10,
 }) => {
   const [name, setName] = useState('');
   const [studentClass, setStudentClass] = useState('7A');
@@ -68,18 +72,18 @@ export const StartScreen: React.FC<StartScreenProps> = ({
         </div>
 
         <h1 className="text-xl sm:text-3xl md:text-4xl font-extrabold text-slate-900 tracking-tight leading-tight px-1">
-          Interactive English Quiz: <span className="text-amber-600 underline decoration-amber-300 decoration-wavy">Procedure Text</span>
+          Interactive English Quiz: <span className="text-amber-600 underline decoration-amber-300 decoration-wavy">Introducing My self and other</span>
         </h1>
         
         <p className="mt-1.5 sm:mt-2 text-xs sm:text-base text-slate-600 max-w-2xl mx-auto font-medium px-2">
-          Bab <span className="font-semibold text-slate-800">"Culinary and Me"</span> (Unit 3: A Secret Recipe) &bull; Buku <span className="font-semibold text-slate-800">"English for Nusantara"</span> Kelas 7
+          Bab <span className="font-semibold text-slate-800">"Culinary and Me"</span> (Materi Procedure Text) &bull; Buku <span className="font-semibold text-slate-800">"English for Nusantara"</span> Kelas 7
         </p>
 
         {/* Badges Overview: 3-column micro cards on mobile, inline on tablet/desktop */}
         <div className="mt-3.5 sm:mt-4 grid grid-cols-3 gap-1.5 sm:flex sm:flex-wrap sm:items-center sm:justify-center sm:gap-3 text-[11px] sm:text-sm">
           <div className="flex flex-col sm:flex-row items-center justify-center gap-1 px-2 py-1.5 sm:px-3 sm:py-1 rounded-xl bg-amber-100/90 text-amber-900 font-bold border border-amber-200 shadow-2xs text-center">
             <ChefHat className="w-3.5 h-3.5 text-amber-700 shrink-0" />
-            <span className="truncate">10 Soal</span>
+            <span className="truncate">{totalQuestions} Soal</span>
           </div>
           <div className="flex flex-col sm:flex-row items-center justify-center gap-1 px-2 py-1.5 sm:px-3 sm:py-1 rounded-xl bg-emerald-100/90 text-emerald-900 font-bold border border-emerald-200 shadow-2xs text-center">
             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
@@ -90,6 +94,21 @@ export const StartScreen: React.FC<StartScreenProps> = ({
             <span className="truncate">K. Merdeka</span>
           </div>
         </div>
+
+        {/* Study Procedure Text Button */}
+        {onOpenProcedureStudy && (
+          <div className="mt-3.5 flex justify-center">
+            <button
+              type="button"
+              onClick={onOpenProcedureStudy}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 text-xs sm:text-sm font-bold shadow-2xs transition-all active:scale-98 cursor-pointer"
+            >
+              <BookOpen className="w-4 h-4 text-amber-600" />
+              <span>Pelajari Modul Procedure Text Terlebih Dahulu</span>
+              <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+            </button>
+          </div>
+        )}
       </motion.div>
 
       {/* Student Form Box */}

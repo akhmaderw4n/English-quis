@@ -14,16 +14,16 @@ import {
   orderBy 
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
-import { QuizSubmission, QuizViolationRecord } from '../types';
+import { QuizSubmission, QuizViolationRecord, Question, ProcedureTextConfig } from '../types';
 
 // Initialize Firebase App & Services
 const app = initializeApp(firebaseConfig);
 
-// Initialize Firestore with auto-detect long polling to ensure bulletproof connectivity across iframes, proxies, and preview sandboxes
+// Initialize Firestore with forced long polling to ensure bulletproof connectivity across school firewalls, proxies, iframes, and preview sandboxes
 export const db = initializeFirestore(
   app,
   {
-    experimentalAutoDetectLongPolling: true,
+    experimentalForceLongPolling: true,
   },
   firebaseConfig.firestoreDatabaseId
 );
@@ -82,10 +82,16 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
  */
 export async function testConnection(): Promise<boolean> {
   try {
-    await getDoc(doc(db, 'settings', 'app'));
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('Connection check timeout')), 3500)
+    );
+    await Promise.race([
+      getDoc(doc(db, 'settings', 'app')),
+      timeoutPromise
+    ]);
     return true;
   } catch (error) {
-    console.warn('Firestore connection check notice:', error instanceof Error ? error.message : String(error));
+    console.warn('Firestore initial connection status:', error instanceof Error ? error.message : String(error));
     return false;
   }
 }
@@ -451,3 +457,140 @@ export function listenToViolationStatus(
     }
   );
 }
+
+const QUESTION_BANK_DOC = 'questionBank';
+
+/**
+ * Subscribe to custom question bank synced across teacher and student devices.
+ */
+export function subscribeToQuestionBank(
+  onData: (questions: Question[] | null) => void,
+  onError?: (error: Error) => void
+): () => void {
+  const docRef = doc(db, SETTINGS_COLLECTION, QUESTION_BANK_DOC);
+  return onSnapshot(
+    docRef,
+    (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        if (data.questionsJson) {
+          try {
+            const parsed = JSON.parse(data.questionsJson);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              onData(parsed);
+              return;
+            }
+          } catch (e) {
+            console.warn('Failed to parse synchronized questionBank:', e);
+          }
+        }
+      }
+      onData(null);
+    },
+    (err) => {
+      console.warn('Question bank subscription notice:', err?.message || err);
+      onError?.(err);
+    }
+  );
+}
+
+/**
+ * Save updated question bank (from Word import) to Firebase so all devices receive it.
+ */
+export async function saveQuestionBankToFirebase(questions: Question[]): Promise<void> {
+  const docRef = doc(db, SETTINGS_COLLECTION, QUESTION_BANK_DOC);
+  try {
+    await setDoc(
+      docRef,
+      {
+        questionsJson: JSON.stringify(questions),
+        totalQuestions: questions.length,
+        updatedAt: new Date().toISOString()
+      },
+      { merge: true }
+    );
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `${SETTINGS_COLLECTION}/${QUESTION_BANK_DOC}`);
+  }
+}
+
+/**
+ * Reset question bank in Firebase back to default.
+ */
+export async function resetQuestionBankInFirebase(): Promise<void> {
+  const docRef = doc(db, SETTINGS_COLLECTION, QUESTION_BANK_DOC);
+  try {
+    await deleteDoc(docRef);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `${SETTINGS_COLLECTION}/${QUESTION_BANK_DOC}`);
+  }
+}
+
+const PROCEDURE_TEXT_DOC = 'procedureText';
+
+/**
+ * Subscribe to synchronized Procedure Text material & recipe database.
+ */
+export function subscribeToProcedureText(
+  onData: (material: ProcedureTextConfig | null) => void,
+  onError?: (error: Error) => void
+): () => void {
+  const docRef = doc(db, SETTINGS_COLLECTION, PROCEDURE_TEXT_DOC);
+  return onSnapshot(
+    docRef,
+    (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        if (data.procedureTextJson) {
+          try {
+            const parsed = JSON.parse(data.procedureTextJson);
+            if (parsed && typeof parsed === 'object') {
+              onData(parsed);
+              return;
+            }
+          } catch (e) {
+            console.warn('Failed to parse synchronized procedureText:', e);
+          }
+        }
+      }
+      onData(null);
+    },
+    (err) => {
+      console.warn('Procedure text subscription notice:', err?.message || err);
+      onError?.(err);
+    }
+  );
+}
+
+/**
+ * Save updated Procedure Text material & recipes to Firebase Firestore.
+ */
+export async function saveProcedureTextToFirebase(config: ProcedureTextConfig): Promise<void> {
+  const docRef = doc(db, SETTINGS_COLLECTION, PROCEDURE_TEXT_DOC);
+  try {
+    await setDoc(
+      docRef,
+      {
+        procedureTextJson: JSON.stringify(config),
+        totalTexts: config.texts?.length || 0,
+        updatedAt: new Date().toISOString()
+      },
+      { merge: true }
+    );
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `${SETTINGS_COLLECTION}/${PROCEDURE_TEXT_DOC}`);
+  }
+}
+
+/**
+ * Reset Procedure Text material in Firebase back to default.
+ */
+export async function resetProcedureTextInFirebase(): Promise<void> {
+  const docRef = doc(db, SETTINGS_COLLECTION, PROCEDURE_TEXT_DOC);
+  try {
+    await deleteDoc(docRef);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `${SETTINGS_COLLECTION}/${PROCEDURE_TEXT_DOC}`);
+  }
+}
+

@@ -13,7 +13,11 @@ import {
   ArrowRight,
   Sparkles,
   Lock,
-  Radio
+  Unlock,
+  Radio,
+  RotateCcw,
+  Home,
+  Monitor
 } from 'lucide-react';
 import { ViolationLockSession } from '../types';
 import { playClickSound, playUnlockSuccessSound, playWrongSound } from '../utils/audio';
@@ -23,12 +27,14 @@ interface ViolationScreenProps {
   session: ViolationLockSession;
   teacherPin: string;
   onUnlock: (tokenUsed: string) => void;
+  onNormalizeScreen?: () => void;
 }
 
 export const ViolationScreen: React.FC<ViolationScreenProps> = ({
   session,
   teacherPin,
   onUnlock,
+  onNormalizeScreen,
 }) => {
   const [inputToken, setInputToken] = useState('');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -338,13 +344,42 @@ export const ViolationScreen: React.FC<ViolationScreenProps> = ({
               className="w-full py-3.5 sm:py-4 rounded-2xl bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 hover:from-amber-600 hover:to-orange-600 text-slate-950 font-black text-sm sm:text-base flex items-center justify-center gap-2 shadow-lg shadow-amber-900/30 transition-all cursor-pointer active:scale-98 disabled:opacity-50"
             >
               <KeyRound className="w-5 h-5 text-slate-950" />
-              <span>Buka Kunci & Lanjut Soal No. {session.lastQuestionIndex + 1}</span>
+              <span>Buka Kunci dengan Token / PIN Guru</span>
               <ArrowRight className="w-4 h-4 text-slate-950" />
             </button>
 
+            {/* Quick Actions: Direct Unlock & Restore Normal Screen */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  playUnlockSuccessSound();
+                  onUnlock(session.unlockToken || 'DIRECT_UNLOCKED');
+                }}
+                className="w-full py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer active:scale-95"
+              >
+                <Unlock className="w-4 h-4" />
+                <span>Buka Kunci Langsung & Lanjut</span>
+              </button>
+
+              {onNormalizeScreen && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    playClickSound();
+                    onNormalizeScreen();
+                  }}
+                  className="w-full py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition-all cursor-pointer active:scale-95"
+                >
+                  <Home className="w-4 h-4 text-amber-400" />
+                  <span>Normalkan Layar & Ke Beranda</span>
+                </button>
+              )}
+            </div>
+
             <div className="text-center pt-1">
               <span className="text-[11px] text-slate-400">
-                Khusus Pengawas: Guru juga dapat membuka kunci ini menggunakan <strong className="text-slate-300">PIN Pengawas Guru</strong>.
+                Khusus Pengawas: Guru juga dapat membuka kunci ini menggunakan <strong className="text-slate-300">PIN Pengawas Guru</strong> atau klik tombol <strong className="text-emerald-400">Buka Kunci Langsung</strong>.
               </span>
             </div>
           </form>

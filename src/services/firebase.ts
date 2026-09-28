@@ -14,7 +14,7 @@ import {
   orderBy 
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
-import { QuizSubmission, QuizViolationRecord, Question, ProcedureTextConfig } from '../types';
+import { QuizSubmission, QuizViolationRecord, Question, ProcedureTextConfig, StudentRestrictionConfig } from '../types';
 
 // Initialize Firebase App & Services
 const app = initializeApp(firebaseConfig);
@@ -595,4 +595,60 @@ export async function resetProcedureTextInFirebase(): Promise<void> {
     handleFirestoreError(error, OperationType.DELETE, `${SETTINGS_COLLECTION}/${PROCEDURE_TEXT_DOC}`);
   }
 }
+
+const STUDENT_RESTRICTIONS_DOC = 'studentRestrictions';
+
+/**
+ * Subscribe to synchronized Student Attempt & Quiz Restriction configuration.
+ */
+export function subscribeToStudentRestrictions(
+  onData: (config: StudentRestrictionConfig | null) => void,
+  onError?: (error: Error) => void
+): () => void {
+  const docRef = doc(db, SETTINGS_COLLECTION, STUDENT_RESTRICTIONS_DOC);
+  return onSnapshot(
+    docRef,
+    (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        if (data.restrictionsJson) {
+          try {
+            const parsed = JSON.parse(data.restrictionsJson);
+            if (parsed && typeof parsed === 'object') {
+              onData(parsed);
+              return;
+            }
+          } catch (e) {
+            console.warn('Failed to parse synchronized studentRestrictions:', e);
+          }
+        }
+      }
+      onData(null);
+    },
+    (err) => {
+      console.warn('Student restrictions subscription notice:', err?.message || err);
+      onError?.(err);
+    }
+  );
+}
+
+/**
+ * Save updated Student Attempt & Quiz Restriction settings to Firebase Firestore.
+ */
+export async function saveStudentRestrictionsToFirebase(config: StudentRestrictionConfig): Promise<void> {
+  const docRef = doc(db, SETTINGS_COLLECTION, STUDENT_RESTRICTIONS_DOC);
+  try {
+    await setDoc(
+      docRef,
+      {
+        restrictionsJson: JSON.stringify(config),
+        updatedAt: new Date().toISOString(),
+      },
+      { merge: true }
+    );
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `${SETTINGS_COLLECTION}/${STUDENT_RESTRICTIONS_DOC}`);
+  }
+}
+
 

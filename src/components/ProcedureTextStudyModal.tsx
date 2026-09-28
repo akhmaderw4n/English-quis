@@ -114,38 +114,44 @@ export const ProcedureTextStudyModal: React.FC<ProcedureTextStudyModalProps> = (
         </div>
 
         {/* Tab Selection */}
-        <div className="flex items-center gap-2 px-4 sm:px-6 pt-3 pb-2 border-b border-slate-200 bg-amber-50/40 shrink-0 flex-wrap">
-          <button
-            type="button"
-            onClick={() => {
-              playClickSound();
-              setActiveTab('theory');
-            }}
-            className={`px-3.5 py-1.5 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-1.5 transition-colors cursor-pointer ${
-              activeTab === 'theory'
-                ? 'bg-amber-500 text-white shadow-xs'
-                : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
-            }`}
-          >
-            <BookOpen className="w-4 h-4" />
-            <span>1. Poin-Poin Materi &amp; Unsur Kebahasaan</span>
-          </button>
+        <div className="flex items-center justify-between gap-2 px-4 sm:px-6 pt-3 pb-2 border-b border-slate-200 bg-amber-50/40 shrink-0 flex-wrap">
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              type="button"
+              onClick={() => {
+                playClickSound();
+                setActiveTab('theory');
+              }}
+              className={`px-3.5 py-1.5 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-1.5 transition-colors cursor-pointer ${
+                activeTab === 'theory'
+                  ? 'bg-amber-500 text-white shadow-xs'
+                  : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+              }`}
+            >
+              <BookOpen className="w-4 h-4" />
+              <span>1. Poin-Poin Materi &amp; Unsur Kebahasaan</span>
+            </button>
 
-          <button
-            type="button"
-            onClick={() => {
-              playClickSound();
-              setActiveTab('recipes');
-            }}
-            className={`px-3.5 py-1.5 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-1.5 transition-colors cursor-pointer ${
-              activeTab === 'recipes'
-                ? 'bg-amber-500 text-white shadow-xs'
-                : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
-            }`}
-          >
-            <MessageSquare className="w-4 h-4" />
-            <span>2. Detail Tiap Poin &amp; Contoh Teks ({config.texts?.length || 0})</span>
-          </button>
+            <button
+              type="button"
+              onClick={() => {
+                playClickSound();
+                setActiveTab('recipes');
+              }}
+              className={`px-3.5 py-1.5 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-1.5 transition-colors cursor-pointer ${
+                activeTab === 'recipes'
+                  ? 'bg-amber-500 text-white shadow-xs'
+                  : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+              }`}
+            >
+              <MessageSquare className="w-4 h-4" />
+              <span>2. Detail Tiap Poin &amp; Contoh Teks ({config.texts?.length || 0})</span>
+            </button>
+          </div>
+
+          <span className="text-[11px] font-bold text-rose-700 bg-rose-50 px-2.5 py-1 rounded-lg border border-rose-200">
+            Batas Akses: 1 User 1 Kali Lihat
+          </span>
         </div>
 
         {/* Tab 1: Theory & Complete Material Points */}

@@ -10,29 +10,68 @@ import {
   ArrowRight, 
   GraduationCap, 
   ChefHat, 
-  ChevronDown
+  ChevronDown,
+  Lock,
+  EyeOff,
+  Sliders,
+  Clock,
+  ShieldCheck,
+  AlertTriangle
 } from 'lucide-react';
-import { StudentInfo } from '../types';
-import { QUIZ_METADATA } from '../data/quizData';
+import { StudentInfo, StudentRestrictionConfig, QuizSubmission } from '../types';
+import { QUIZ_METADATA, INITIAL_STUDENT_RESTRICTION_CONFIG, getStudentAttemptStatus } from '../data/quizData';
 import { playClickSound } from '../utils/audio';
 
 interface StartScreenProps {
   onStartQuiz: (student: StudentInfo) => void;
   onOpenTeacherAuth?: () => void;
   onOpenProcedureStudy?: () => void;
+  isStudyLocked?: boolean;
+  onStudentDraftChange?: (student: StudentInfo) => void;
   totalQuestions?: number;
+  restrictions?: StudentRestrictionConfig;
+  submissions?: QuizSubmission[];
+  onOpenRestrictionMenu?: () => void;
 }
 
 export const StartScreen: React.FC<StartScreenProps> = ({
   onStartQuiz,
-  onOpenTeacherAuth,
   onOpenProcedureStudy,
+  isStudyLocked = false,
+  onStudentDraftChange,
   totalQuestions = 10,
+  restrictions = INITIAL_STUDENT_RESTRICTION_CONFIG,
+  submissions = [],
+  onOpenRestrictionMenu,
 }) => {
   const [name, setName] = useState('');
   const [studentClass, setStudentClass] = useState('7A');
   const [studentNumber, setStudentNumber] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
+
+  const handleNameChange = (val: string) => {
+    setName(val);
+    setErrorMsg('');
+    onStudentDraftChange?.({ name: val, studentClass, studentNumber });
+  };
+
+  const handleClassChange = (val: string) => {
+    setStudentClass(val);
+    setErrorMsg('');
+    onStudentDraftChange?.({ name, studentClass: val, studentNumber });
+  };
+
+  const handleNumberChange = (val: string) => {
+    setStudentNumber(val);
+    setErrorMsg('');
+    onStudentDraftChange?.({ name, studentClass, studentNumber: val });
+  };
+
+  const attemptStatus = getStudentAttemptStatus(
+    { name, studentClass, studentNumber },
+    submissions,
+    restrictions
+  );
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -48,6 +87,21 @@ export const StartScreen: React.FC<StartScreenProps> = ({
       setErrorMsg('Harap masukkan Nomor Absen siswa.');
       return;
     }
+    if (!restrictions.isQuizOpen) {
+      setErrorMsg('Sesi pengerjaan kuis saat ini sedang ditutup sementara oleh Guru.');
+      return;
+    }
+    if (!attemptStatus.isClassAllowed) {
+      setErrorMsg(`Akses pengerjaan untuk Kelas ${studentClass} saat ini belum dibuka oleh Guru.`);
+      return;
+    }
+    if (attemptStatus.isQuotaExhausted) {
+      setErrorMsg(
+        `Batas pengerjaan kuis untuk ${name.trim()} (Kelas ${studentClass} • Absen ${studentNumber}) telah habis (${attemptStatus.attemptsUsed}/${attemptStatus.effectiveMaxAttempts} kali).`
+      );
+      return;
+    }
+
     setErrorMsg('');
     playClickSound();
     onStartQuiz({
@@ -57,13 +111,18 @@ export const StartScreen: React.FC<StartScreenProps> = ({
     });
   };
 
+  const studyLockLabel =
+    restrictions.studyModuleAccessMode === 'locked'
+      ? 'Modul Ajar Dikunci Selama Sesi Ujian'
+      : 'Modul Ajar Terkunci (Sudah Dilihat 1 Kali)';
+
   return (
     <div className="py-4 sm:py-8 max-w-2xl mx-auto px-3.5 sm:px-6">
       {/* Brand Header Banner */}
       <motion.div 
         initial={{ opacity: 0, y: -12 }}
         animate={{ opacity: 1, y: 0 }}
-        className="text-center mb-5 sm:mb-8"
+        className="text-center mb-5 sm:mb-7"
       >
         {/* Prominent Teacher Branding */}
         <div className="inline-flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-1 sm:py-1.5 rounded-full bg-gradient-to-r from-amber-500 to-orange-500 text-white font-bold text-xs sm:text-base shadow-sm mb-3 sm:mb-4 border border-amber-300">
@@ -95,20 +154,96 @@ export const StartScreen: React.FC<StartScreenProps> = ({
           </div>
         </div>
 
-        {/* Study Procedure Text Button */}
-        {onOpenProcedureStudy && (
-          <div className="mt-3.5 flex justify-center">
-            <button
-              type="button"
-              onClick={onOpenProcedureStudy}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 text-xs sm:text-sm font-bold shadow-2xs transition-all active:scale-98 cursor-pointer"
-            >
-              <BookOpen className="w-4 h-4 text-amber-600" />
-              <span>Pelajari Modul: Introducing My Self and Other</span>
-              <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-            </button>
+        {/* Study Module & Student Restriction Menu Controls */}
+        <div className="mt-3.5 flex flex-col items-center gap-2">
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            {/* Study Module Button (1 User 1 Kali Lihat) */}
+            {onOpenProcedureStudy && (
+              isStudyLocked ? (
+                <div className="inline-flex flex-col items-center gap-1 px-4 py-2 rounded-xl bg-slate-100 text-slate-600 border border-slate-300 text-xs sm:text-sm font-bold shadow-2xs select-none max-w-md">
+                  <div className="flex items-center gap-2 text-rose-700">
+                    <Lock className="w-4 h-4 text-rose-600 shrink-0" />
+                    <span>{studyLockLabel}</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-600">
+                    <EyeOff className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                    <span>
+                      Batas akses: <strong className="text-slate-900">1 User 1 Kali Lihat</strong>
+                      {name.trim() ? ` (${name.trim()})` : ''}
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={onOpenProcedureStudy}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 text-xs sm:text-sm font-bold shadow-2xs transition-all active:scale-98 cursor-pointer"
+                >
+                  <BookOpen className="w-4 h-4 text-amber-600" />
+                  <span>Pelajari Modul: Introducing My Self and Other</span>
+                  <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+                </button>
+              )
+            )}
+
+            {/* Menu Batasan Pengerjaan Siswa Button */}
+            {onOpenRestrictionMenu && (
+              <button
+                type="button"
+                onClick={() => {
+                  playClickSound();
+                  onOpenRestrictionMenu();
+                }}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs sm:text-sm font-bold shadow-2xs transition-all active:scale-98 cursor-pointer"
+                title="Buka Menu Pengaturan Batasan Pengerjaan Siswa"
+              >
+                <Sliders className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                <span>Batasan Pengerjaan Siswa</span>
+              </button>
+            )}
           </div>
-        )}
+
+          {!isStudyLocked && (
+            <span className="text-[11px] text-slate-500 font-medium">
+              *Batas akses modul ajar: <strong>1 User 1 Kali Lihat</strong>
+            </span>
+          )}
+        </div>
+
+        {/* Active Student Restriction Summary Bar */}
+        <div className="mt-3 inline-flex flex-wrap items-center justify-center gap-x-3 gap-y-1 px-3.5 py-2 rounded-xl bg-slate-100/90 border border-slate-200/90 text-[11px] sm:text-xs text-slate-700 font-medium">
+          <span className="inline-flex items-center gap-1 font-bold text-slate-900">
+            <ShieldCheck className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+            <span>Aturan Pengerjaan:</span>
+          </span>
+          <span>
+            Kuota Kuis:{' '}
+            <strong className="text-slate-900">
+              {restrictions.maxAttempts === 0
+                ? 'Tanpa Batas'
+                : `Maks. ${restrictions.maxAttempts}x / Siswa`}
+            </strong>
+          </span>
+          <span aria-hidden="true">&bull;</span>
+          <span className="inline-flex items-center gap-1">
+            <Clock className="w-3 h-3 text-blue-600 shrink-0" />
+            <span>
+              Waktu:{' '}
+              <strong className="text-slate-900">
+                {restrictions.timeLimitMinutes === 0
+                  ? 'Tanpa Batas'
+                  : `${restrictions.timeLimitMinutes} Menit`}
+              </strong>
+            </span>
+          </span>
+          <span aria-hidden="true">&bull;</span>
+          <span>
+            Status:{' '}
+            <strong className={restrictions.isQuizOpen ? 'text-emerald-700' : 'text-rose-700'}>
+              {restrictions.isQuizOpen ? 'Dibuka' : 'Ditutup'}
+            </strong>
+          </span>
+        </div>
       </motion.div>
 
       {/* Student Form Box */}
@@ -118,7 +253,8 @@ export const StartScreen: React.FC<StartScreenProps> = ({
         transition={{ delay: 0.05 }}
         className="bg-white rounded-2xl sm:rounded-3xl p-4.5 sm:p-8 border border-amber-200/90 shadow-sm"
       >
-          <div className="flex items-center gap-2.5 pb-3.5 border-b border-slate-100 mb-4 sm:mb-5">
+        <div className="flex items-center justify-between gap-2.5 pb-3.5 border-b border-slate-100 mb-4 sm:mb-5 flex-wrap">
+          <div className="flex items-center gap-2.5">
             <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-amber-100 flex items-center justify-center text-amber-700 shrink-0 shadow-2xs">
               <User className="w-4 h-4 sm:w-5 sm:h-5" />
             </div>
@@ -128,84 +264,170 @@ export const StartScreen: React.FC<StartScreenProps> = ({
             </div>
           </div>
 
-          <form onSubmit={handleSubmit} className="space-y-4">
-            {/* Student Name */}
+          <span className="text-[11px] font-bold text-amber-900 bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-200">
+            {restrictions.maxAttempts === 0
+              ? 'Mode Latihan (Tanpa Batas)'
+              : `Batas: ${restrictions.maxAttempts}x Pengerjaan / Siswa`}
+          </span>
+        </div>
+
+        {/* Closed Session Warning Banner */}
+        {!restrictions.isQuizOpen && (
+          <div className="mb-4 p-3.5 rounded-xl bg-rose-50 border border-rose-300 text-rose-900 text-xs flex items-start gap-2.5">
+            <Lock className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
             <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                Nama Lengkap Siswa <span className="text-rose-500">*</span>
-              </label>
-              <div className="relative">
-                <input
-                  type="text"
-                  required
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="Contoh: Galang Pratama"
-                  className="w-full pl-10 pr-4 py-3 sm:py-2.5 rounded-xl border border-slate-300 focus:border-amber-500 focus:ring-2 focus:ring-amber-200 outline-hidden text-base sm:text-sm text-slate-800 transition-all font-medium"
-                />
-                <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5 sm:top-3" />
-              </div>
+              <span className="font-extrabold block">Sesi Pengerjaan Kuis Sedang Ditutup</span>
+              <span className="text-rose-800">
+                Guru pengawas sedang menutup sementara akses pengerjaan kuis. Silakan tunggu hingga sesi dibuka kembali.
+              </span>
             </div>
+          </div>
+        )}
 
-            {/* Class Selection Dropdown */}
-            <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                Pilih Kelas <span className="text-rose-500">*</span>
-              </label>
-              <div className="relative">
-                <select
-                  required
-                  value={studentClass}
-                  onChange={(e) => {
-                    playClickSound();
-                    setStudentClass(e.target.value);
-                  }}
-                  className="w-full pl-10 pr-10 py-3 sm:py-2.5 rounded-xl border border-slate-300 focus:border-amber-500 focus:ring-2 focus:ring-amber-200 outline-hidden text-base sm:text-sm text-slate-800 transition-all font-medium bg-white appearance-none cursor-pointer"
-                >
-                  <option value="" disabled>-- Pilih Kelas Anda --</option>
-                  <option value="7A">Kelas 7A</option>
-                  <option value="7B">Kelas 7B</option>
-                  <option value="7C">Kelas 7C</option>
-                  <option value="7D">Kelas 7D</option>
-                  <option value="7E">Kelas 7E</option>
-                  <option value="7F">Kelas 7F</option>
-                  <option value="7G">Kelas 7G</option>
-                  <option value="7H">Kelas 7H</option>
-                </select>
-                <School className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5 sm:top-3 pointer-events-none" />
-                <ChevronDown className="w-4 h-4 text-slate-400 absolute right-3.5 top-3.5 sm:top-3 pointer-events-none" />
-              </div>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          {/* Student Name */}
+          <div>
+            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+              Nama Lengkap Siswa <span className="text-rose-500">*</span>
+            </label>
+            <div className="relative">
+              <input
+                type="text"
+                required
+                value={name}
+                onChange={(e) => handleNameChange(e.target.value)}
+                placeholder="Contoh: Galang Pratama"
+                className="w-full pl-10 pr-4 py-3 sm:py-2.5 rounded-xl border border-slate-300 focus:border-amber-500 focus:ring-2 focus:ring-amber-200 outline-hidden text-base sm:text-sm text-slate-800 transition-all font-medium"
+              />
+              <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5 sm:top-3" />
             </div>
+          </div>
 
-            {/* Absen Input */}
-            <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                Nomor Absen Siswa <span className="text-rose-500">*</span>
-              </label>
-              <div className="relative">
-                <input
-                  type="number"
-                  inputMode="numeric"
-                  pattern="[0-9]*"
-                  min="1"
-                  max="60"
-                  required
-                  value={studentNumber}
-                  onChange={(e) => setStudentNumber(e.target.value)}
-                  placeholder="Contoh: 12"
-                  className="w-full pl-10 pr-4 py-3 sm:py-2.5 rounded-xl border border-slate-300 focus:border-amber-500 focus:ring-2 focus:ring-amber-200 outline-hidden text-base sm:text-sm text-slate-800 transition-all font-medium"
-                />
-                <Hash className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5 sm:top-3" />
-              </div>
+          {/* Class Selection Dropdown */}
+          <div>
+            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+              Pilih Kelas <span className="text-rose-500">*</span>
+            </label>
+            <div className="relative">
+              <select
+                required
+                value={studentClass}
+                onChange={(e) => {
+                  playClickSound();
+                  handleClassChange(e.target.value);
+                }}
+                className="w-full pl-10 pr-10 py-3 sm:py-2.5 rounded-xl border border-slate-300 focus:border-amber-500 focus:ring-2 focus:ring-amber-200 outline-hidden text-base sm:text-sm text-slate-800 transition-all font-medium bg-white appearance-none cursor-pointer"
+              >
+                <option value="" disabled>-- Pilih Kelas Anda --</option>
+                <option value="7A">Kelas 7A</option>
+                <option value="7B">Kelas 7B</option>
+                <option value="7C">Kelas 7C</option>
+                <option value="7D">Kelas 7D</option>
+                <option value="7E">Kelas 7E</option>
+                <option value="7F">Kelas 7F</option>
+                <option value="7G">Kelas 7G</option>
+                <option value="7H">Kelas 7H</option>
+              </select>
+              <School className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5 sm:top-3 pointer-events-none" />
+              <ChevronDown className="w-4 h-4 text-slate-400 absolute right-3.5 top-3.5 sm:top-3 pointer-events-none" />
             </div>
+          </div>
 
-            {errorMsg && (
-              <p className="text-xs text-rose-600 font-semibold bg-rose-50 p-2.5 rounded-lg border border-rose-200">
-                {errorMsg}
-              </p>
-            )}
+          {/* Absen Input */}
+          <div>
+            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+              Nomor Absen Siswa <span className="text-rose-500">*</span>
+            </label>
+            <div className="relative">
+              <input
+                type="number"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                min="1"
+                max="60"
+                required
+                value={studentNumber}
+                onChange={(e) => handleNumberChange(e.target.value)}
+                placeholder="Contoh: 12"
+                className="w-full pl-10 pr-4 py-3 sm:py-2.5 rounded-xl border border-slate-300 focus:border-amber-500 focus:ring-2 focus:ring-amber-200 outline-hidden text-base sm:text-sm text-slate-800 transition-all font-medium"
+              />
+              <Hash className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5 sm:top-3" />
+            </div>
+          </div>
 
-            {/* Submit Button */}
+          {/* Live Attempt Quota Check for Current Student Identity */}
+          {attemptStatus.isIdentityComplete && (
+            <div
+              className={`p-3 rounded-xl border text-xs flex items-start gap-2.5 ${
+                !attemptStatus.isClassAllowed
+                  ? 'bg-rose-50 border-rose-300 text-rose-900'
+                  : attemptStatus.isQuotaExhausted
+                  ? 'bg-rose-50 border-rose-300 text-rose-900'
+                  : 'bg-emerald-50/80 border-emerald-200 text-emerald-900'
+              }`}
+            >
+              {!attemptStatus.isClassAllowed ? (
+                <>
+                  <Lock className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-bold block">Kelas {studentClass} Sedang Dibatasi</span>
+                    <span>Saat ini pengerjaan kuis belum dibuka untuk Kelas {studentClass}.</span>
+                  </div>
+                </>
+              ) : attemptStatus.isQuotaExhausted ? (
+                <>
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-extrabold block">
+                      Batas Pengerjaan Siswa Telah Habis ({attemptStatus.attemptsUsed}/
+                      {attemptStatus.effectiveMaxAttempts} Kali)
+                    </span>
+                    <span>
+                      <strong>{name.trim()}</strong> (Kelas {studentClass} &bull; Absen {studentNumber}) sudah mengerjakan kuis ini dengan nilai terbaik{' '}
+                      <strong>{attemptStatus.bestScore} Poin</strong>. Hubungi guru jika memerlukan izin pengerjaan ulang.
+                    </span>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-bold block">
+                      Kuota Pengerjaan Tersedia:{' '}
+                      {attemptStatus.effectiveMaxAttempts === 0
+                        ? 'Tanpa Batas'
+                        : `Percobaan ke-${attemptStatus.attemptsUsed + 1} dari ${attemptStatus.effectiveMaxAttempts}`}
+                    </span>
+                    {attemptStatus.attemptsUsed > 0 && (
+                      <span className="text-[11px] text-emerald-800">
+                        Riwayat nilai sebelumnya: {attemptStatus.bestScore} Poin
+                      </span>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {errorMsg && (
+            <p className="text-xs text-rose-600 font-semibold bg-rose-50 p-2.5 rounded-lg border border-rose-200">
+              {errorMsg}
+            </p>
+          )}
+
+          {/* Submit Button */}
+          {attemptStatus.isIdentityComplete && !attemptStatus.canStartQuiz ? (
+            <div className="w-full mt-3 py-3.5 sm:py-4 px-6 rounded-xl bg-slate-200 text-slate-600 font-bold text-sm sm:text-base flex items-center justify-center gap-2 select-none cursor-not-allowed border border-slate-300">
+              <Lock className="w-4 h-4 text-rose-600 shrink-0" />
+              <span>
+                {!restrictions.isQuizOpen
+                  ? 'Sesi Kuis Sedang Ditutup Guru'
+                  : !attemptStatus.isClassAllowed
+                  ? `Akses Kelas ${studentClass} Sedang Dibatasi`
+                  : `Sudah Mencapai Batas Pengerjaan (${attemptStatus.attemptsUsed}/${attemptStatus.effectiveMaxAttempts}x)`}
+              </span>
+            </div>
+          ) : (
             <button
               type="submit"
               className="w-full mt-3 py-3.5 sm:py-4 px-6 rounded-xl bg-gradient-to-r from-amber-500 via-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 active:scale-98 text-white font-bold text-base shadow-md hover:shadow-lg transition-all flex items-center justify-center gap-2 cursor-pointer group"
@@ -213,19 +435,30 @@ export const StartScreen: React.FC<StartScreenProps> = ({
               <span>Mulai Mengerjakan Kuis</span>
               <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
             </button>
-          </form>
+          )}
+        </form>
 
-          {/* Quick instructions */}
-          <div className="mt-4 sm:mt-5 pt-3.5 sm:pt-4 border-t border-slate-100 text-[11px] sm:text-xs text-slate-500 space-y-1">
-            <div className="flex items-center gap-1.5 text-slate-700 font-semibold mb-1">
-              <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-              <span>Petunjuk Pengerjaan Soal:</span>
-            </div>
-            <p>&bull; Kuis terdiri dari 10 butir soal pilihan ganda interaktif.</p>
-            <p>&bull; Bacalah teks resep dan perhatikan kata kerja instruksi (action verbs) serta urutan langkahnya.</p>
-            <p>&bull; Hasil nilaimu akan otomatis direkap ke dalam Dashboard Guru.</p>
+        {/* Quick instructions */}
+        <div className="mt-4 sm:mt-5 pt-3.5 sm:pt-4 border-t border-slate-100 text-[11px] sm:text-xs text-slate-500 space-y-1">
+          <div className="flex items-center gap-1.5 text-slate-700 font-semibold mb-1">
+            <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+            <span>Petunjuk &amp; Batasan Pengerjaan Soal:</span>
           </div>
-        </motion.div>
+          <p>&bull; Kuis terdiri dari {totalQuestions} butir soal pilihan ganda interaktif.</p>
+          <p>
+            &bull; Batas pengerjaan siswa:{' '}
+            <strong>
+              {restrictions.maxAttempts === 0
+                ? 'Bebas diulang (Mode Latihan)'
+                : `Maksimal ${restrictions.maxAttempts} kali pengerjaan untuk setiap siswa`}
+            </strong>
+            {restrictions.timeLimitMinutes > 0
+              ? ` dengan waktu pengerjaan ${restrictions.timeLimitMinutes} menit.`
+              : '.'}
+          </p>
+          <p>&bull; Hasil nilaimu akan otomatis direkap ke dalam Dashboard Guru.</p>
+        </div>
+      </motion.div>
     </div>
   );
 };

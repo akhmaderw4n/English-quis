@@ -13,10 +13,12 @@ import {
   GraduationCap, 
   Sparkles,
   ChevronRight,
-  School
+  School,
+  Lock,
+  EyeOff
 } from 'lucide-react';
-import { QuizSubmission, StudentInfo, Question } from '../types';
-import { QUIZ_METADATA } from '../data/quizData';
+import { QuizSubmission, StudentInfo, Question, StudentRestrictionConfig } from '../types';
+import { QUIZ_METADATA, INITIAL_STUDENT_RESTRICTION_CONFIG, getStudentAttemptStatus } from '../data/quizData';
 import { playCelebrationSound, playClickSound } from '../utils/audio';
 import { ReviewModal } from './ReviewModal';
 import { PrintCertificateModal } from './PrintCertificateModal';
@@ -28,6 +30,8 @@ interface ResultScreenProps {
   onGoHome: () => void;
   onOpenTeacherAuth: () => void;
   questions?: Question[];
+  restrictions?: StudentRestrictionConfig;
+  submissions?: QuizSubmission[];
 }
 
 export const ResultScreen: React.FC<ResultScreenProps> = ({
@@ -37,10 +41,13 @@ export const ResultScreen: React.FC<ResultScreenProps> = ({
   onGoHome,
   onOpenTeacherAuth,
   questions,
+  restrictions = INITIAL_STUDENT_RESTRICTION_CONFIG,
+  submissions = [],
 }) => {
   const [showReview, setShowReview] = useState(false);
   const [showPrintModal, setShowPrintModal] = useState(false);
   const isPassed = submission.score >= QUIZ_METADATA.passingScore;
+  const attemptStatus = getStudentAttemptStatus(student, submissions, restrictions);
 
   useEffect(() => {
     if (isPassed) {
@@ -132,8 +139,16 @@ export const ResultScreen: React.FC<ResultScreenProps> = ({
             )}
             <p className="text-xs text-slate-600 mt-2 max-w-md mx-auto leading-relaxed">
               {isPassed 
-                ? 'Kerja bagus! Kamu telah memahami struktur resep dan unsur kebahasaan procedure text dengan sangat baik.' 
-                : 'Tetap semangat! Pelajari kembali action verbs dan sequence words melalui tombol pembahasan soal di bawah ini.'}
+                ? 'Kerja bagus! Kamu telah memahami materi Introducing Myself, Others & Descriptive Text dengan sangat baik.' 
+                : 'Tetap semangat! Pelajari kembali ungkapan perkenalan diri dan ciri-ciri teks deskriptif.'}
+            </p>
+            <p className="text-[11px] font-bold text-slate-500 mt-1.5">
+              Kuota Pengerjaan Siswa:{' '}
+              <span className="text-slate-800">
+                {attemptStatus.effectiveMaxAttempts === 0
+                  ? `${attemptStatus.attemptsUsed}x Dikerjakan (Tanpa Batas)`
+                  : `${attemptStatus.attemptsUsed} / ${attemptStatus.effectiveMaxAttempts} Kali Pengerjaan`}
+              </span>
             </p>
           </div>
         </div>
@@ -164,32 +179,49 @@ export const ResultScreen: React.FC<ResultScreenProps> = ({
 
         {/* Actions Button Bar: Stacked & Grid layout on mobile */}
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-center gap-2.5 sm:gap-3 max-w-lg mx-auto">
-          {/* Review Button (Full width primary on phone) */}
-          <button
-            type="button"
-            onClick={() => {
-              playClickSound();
-              setShowReview(true);
-            }}
-            className="w-full sm:w-auto px-5 py-3 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 active:scale-98 text-white font-bold text-xs sm:text-sm shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer"
-          >
-            <BookOpen className="w-4 h-4" />
-            <span>Lihat Pembahasan Lengkap</span>
-          </button>
-
-          <div className="grid grid-cols-2 gap-2 sm:flex sm:items-center sm:gap-3">
-            {/* Retake Button */}
+          {/* Review Button (Respects allowReviewAfterQuiz restriction) */}
+          {restrictions.allowReviewAfterQuiz ? (
             <button
               type="button"
               onClick={() => {
                 playClickSound();
-                onRetakeQuiz();
+                setShowReview(true);
               }}
-              className="px-3.5 sm:px-5 py-2.5 sm:py-3 rounded-xl bg-white border border-slate-300 hover:bg-slate-50 active:scale-98 text-slate-700 font-bold text-xs sm:text-sm transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs"
+              className="w-full sm:w-auto px-5 py-3 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 active:scale-98 text-white font-bold text-xs sm:text-sm shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer"
             >
-              <RotateCcw className="w-4 h-4 text-slate-500 shrink-0" />
-              <span>Ulangi Kuis</span>
+              <BookOpen className="w-4 h-4" />
+              <span>Lihat Pembahasan Lengkap</span>
             </button>
+          ) : (
+            <div className="w-full sm:w-auto px-4 py-3 rounded-xl bg-slate-100 border border-slate-300 text-slate-500 font-bold text-xs sm:text-sm flex items-center justify-center gap-2 select-none">
+              <EyeOff className="w-4 h-4 text-slate-400 shrink-0" />
+              <span>Pembahasan Dikunci Guru</span>
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 gap-2 sm:flex sm:items-center sm:gap-3">
+            {/* Retake Button (Enforces Student Attempt Restriction) */}
+            {attemptStatus.canStartQuiz ? (
+              <button
+                type="button"
+                onClick={() => {
+                  playClickSound();
+                  onRetakeQuiz();
+                }}
+                className="px-3.5 sm:px-5 py-2.5 sm:py-3 rounded-xl bg-white border border-slate-300 hover:bg-slate-50 active:scale-98 text-slate-700 font-bold text-xs sm:text-sm transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs"
+              >
+                <RotateCcw className="w-4 h-4 text-slate-500 shrink-0" />
+                <span>Ulangi Kuis</span>
+              </button>
+            ) : (
+              <div
+                className="px-3.5 sm:px-4 py-2.5 sm:py-3 rounded-xl bg-slate-100 border border-slate-300 text-slate-500 font-bold text-xs sm:text-sm flex items-center justify-center gap-1.5 select-none cursor-not-allowed"
+                title="Batas kuota pengerjaan kuis untuk akun siswa ini telah habis"
+              >
+                <Lock className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+                <span>Batas {attemptStatus.attemptsUsed}/{attemptStatus.effectiveMaxAttempts}x Selesai</span>
+              </div>
+            )}
 
             {/* Print/Download Button */}
             <button

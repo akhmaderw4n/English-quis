@@ -103,3 +103,16 @@ export interface ProcedureTextConfig {
   texts: ProcedureTextRecipe[];
   lastUpdated?: string;
 }
+
+export interface StudentRestrictionConfig {
+  maxAttempts: number; // 1 = 1x pengerjaan, 2 = 2x, 3 = 3x, 0 = tanpa batas
+  timeLimitMinutes: number; // 0 = tanpa batas waktu, atau 15, 20, 30, 45, 60 menit
+  isQuizOpen: boolean; // true = sesi kuis dibuka, false = ditutup sementara
+  allowedClasses: string[]; // ['7A', '7B', '7C', '7D', '7E', '7F', '7G', '7H']
+  allowRemedialIfBelowKKM: boolean; // +1 kesempatan remedial jika nilai tertinggi < KKM
+  allowReviewAfterQuiz: boolean; // izinkan siswa melihat kunci/pembahasan setelah selesai
+  studyModuleAccessMode: 'once_per_user' | 'unlimited' | 'locked'; // 1 user 1x lihat, bebas, atau terkunci penuh
+  extraAttemptGrants: Record<string, number>; // studentKey -> jumlah ekstra kuota pengerjaan
+  updatedAt?: string;
+}
+

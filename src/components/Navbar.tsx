@@ -1,5 +1,5 @@
 import React from 'react';
-import { BookOpen, ShieldCheck, Volume2, VolumeX, Award, Cloud, CloudOff, FileText, RotateCcw } from 'lucide-react';
+import { BookOpen, ShieldCheck, Volume2, VolumeX, Award, Cloud, CloudOff, FileText, RotateCcw, Lock } from 'lucide-react';
 import { QUIZ_METADATA } from '../data/quizData';
 import { ViewState } from '../types';
 
@@ -12,6 +12,7 @@ interface NavbarProps {
   studentName?: string;
   isDbConnected?: boolean;
   onOpenProcedureStudy?: () => void;
+  isStudyLocked?: boolean;
   onNormalizeScreen?: () => void;
 }
 
@@ -24,6 +25,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   studentName,
   isDbConnected = true,
   onOpenProcedureStudy,
+  isStudyLocked = false,
   onNormalizeScreen,
 }) => {
   return (
@@ -74,16 +76,27 @@ export const Navbar: React.FC<NavbarProps> = ({
             </button>
           )}
 
-          {/* Procedure Text study material quick button */}
+          {/* Study material quick button (1 User 1 Kali Lihat) */}
           {onOpenProcedureStudy && currentView !== 'quiz' && currentView !== 'violation_locked' && (
-            <button
-              type="button"
-              onClick={onOpenProcedureStudy}
-              className="hidden lg:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 text-xs font-bold border border-amber-200 transition-colors cursor-pointer"
-            >
-              <FileText className="w-3.5 h-3.5 text-amber-600" />
-              <span>Materi: Introducing My Self &amp; Other</span>
-            </button>
+            isStudyLocked ? (
+              <div
+                className="hidden lg:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 text-slate-500 text-xs font-bold border border-slate-300 select-none cursor-not-allowed"
+                title="Modul ajar hanya dapat dilihat 1 kali untuk setiap user (1 User 1 Kali Lihat)"
+              >
+                <Lock className="w-3.5 h-3.5 text-rose-500" />
+                <span>Modul Terkunci (1x Lihat)</span>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={onOpenProcedureStudy}
+                className="hidden lg:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 text-xs font-bold border border-amber-200 transition-colors cursor-pointer"
+                title="Buka Modul Ajar (Batas akses: 1 User 1 Kali Lihat)"
+              >
+                <FileText className="w-3.5 h-3.5 text-amber-600" />
+                <span>Materi: Introducing My Self &amp; Other</span>
+              </button>
+            )
           )}
           {/* Cloud Database Sync Status */}
           <div 

@@ -42,16 +42,18 @@ import {
   RotateCcw,
   Headphones,
   Pencil,
-  Plus
+  Plus,
+  Sliders
 } from 'lucide-react';
-import { QuizSubmission, QuizViolationRecord, Question, ProcedureTextConfig } from '../types';
-import { QUIZ_QUESTIONS, QUIZ_METADATA, INITIAL_STUDENT_SUBMISSIONS, INITIAL_PROCEDURE_TEXT_CONFIG } from '../data/quizData';
+import { QuizSubmission, QuizViolationRecord, Question, ProcedureTextConfig, StudentRestrictionConfig } from '../types';
+import { QUIZ_QUESTIONS, QUIZ_METADATA, INITIAL_STUDENT_SUBMISSIONS, INITIAL_PROCEDURE_TEXT_CONFIG, INITIAL_STUDENT_RESTRICTION_CONFIG } from '../data/quizData';
 import { ReviewModal } from './ReviewModal';
 import { TeacherInputStudent } from './TeacherInputStudent';
 import { WordImportModal } from './WordImportModal';
 import { QuestionEditModal } from './QuestionEditModal';
 import { PermanentDeleteModal } from './PermanentDeleteModal';
 import { ProcedureTextEditor } from './ProcedureTextEditor';
+import { StudentRestrictionPanel } from './StudentRestrictionPanel';
 import { downloadWordCompatibleDoc } from '../utils/wordQuestionParser';
 import { playClickSound, playUnlockSuccessSound, playViolationAlertSound } from '../utils/audio';
 import { executePrintStudentScore, executePrintTeacherRecap, openTeacherRecapInNewTab } from '../utils/printReport';
@@ -78,6 +80,9 @@ interface TeacherDashboardProps {
   procedureTextConfig?: ProcedureTextConfig;
   onUpdateProcedureText?: (newConfig: ProcedureTextConfig) => Promise<void> | void;
   onResetProcedureText?: () => Promise<void> | void;
+  studentRestrictions?: StudentRestrictionConfig;
+  onUpdateStudentRestrictions?: (newConfig: StudentRestrictionConfig) => Promise<void> | void;
+  onResetStudyModuleViews?: () => void;
 }
 
 export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
@@ -102,8 +107,11 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
   procedureTextConfig,
   onUpdateProcedureText,
   onResetProcedureText,
+  studentRestrictions = INITIAL_STUDENT_RESTRICTION_CONFIG,
+  onUpdateStudentRestrictions,
+  onResetStudyModuleViews,
 }) => {
-  const [activeTab, setActiveTab] = useState<'recap' | 'input' | 'analysis' | 'bank' | 'procedure' | 'settings' | 'violations'>('recap');
+  const [activeTab, setActiveTab] = useState<'recap' | 'input' | 'analysis' | 'bank' | 'procedure' | 'restrictions' | 'settings' | 'violations'>('recap');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedClass, setSelectedClass] = useState<string>('ALL');
   const [sortField, setSortField] = useState<'absen' | 'score' | 'name' | 'time'>('absen');
@@ -786,6 +794,28 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
               activeTab === 'procedure' ? 'bg-amber-600 text-white' : 'bg-amber-100 text-amber-900'
             }`}>
               {(procedureTextConfig?.texts || INITIAL_PROCEDURE_TEXT_CONFIG.texts).length} Teks
+            </span>
+          </button>
+
+          {/* Batasan Pengerjaan Siswa Tab Button */}
+          <button
+            type="button"
+            onClick={() => {
+              playClickSound();
+              setActiveTab('restrictions');
+            }}
+            className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-1.5 sm:gap-2 transition-all cursor-pointer shrink-0 whitespace-nowrap ${
+              activeTab === 'restrictions'
+                ? 'bg-amber-500 text-white shadow-xs'
+                : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+            }`}
+          >
+            <Sliders className="w-4 h-4" />
+            <span>Batasan Pengerjaan Siswa</span>
+            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-black uppercase ${
+              activeTab === 'restrictions' ? 'bg-amber-600 text-white' : 'bg-amber-100 text-amber-900'
+            }`}>
+              {studentRestrictions.maxAttempts === 0 ? 'Bebas' : `Maks ${studentRestrictions.maxAttempts}x`}
             </span>
           </button>
 
@@ -1560,6 +1590,18 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
             }
           }}
           isDbConnected={isDbConnected}
+        />
+      )}
+
+      {/* Tab: BATASAN PENGERJAAN SISWA */}
+      {activeTab === 'restrictions' && (
+        <StudentRestrictionPanel
+          config={studentRestrictions}
+          submissions={submissions}
+          onUpdateConfig={(newConfig) => {
+            onUpdateStudentRestrictions?.(newConfig);
+          }}
+          onResetStudyModuleViews={onResetStudyModuleViews}
         />
       )}
 

@@ -46,6 +46,7 @@ interface QuizScreenProps {
     reason: string;
   }) => void;
   resumedBannerNotice?: boolean;
+  timeLimitMinutes?: number;
 }
 
 export const QuizScreen: React.FC<QuizScreenProps> = ({
@@ -62,6 +63,7 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
   initialViolationsCount = 0,
   onViolationOccurred,
   resumedBannerNotice = false,
+  timeLimitMinutes = 0,
 }) => {
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const [answers, setAnswers] = useState<Record<number, 'A' | 'B' | 'C' | 'D'>>(initialAnswers);
@@ -109,13 +111,26 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
     };
   }, [antiCheatEnabled, currentIndex, answers, flagged, seconds, onViolationOccurred]);
 
-  // Timer
+  // Timer & Auto-Submit when timeLimitMinutes is reached
+  const maxSeconds = timeLimitMinutes > 0 ? timeLimitMinutes * 60 : 0;
+  const remainingSeconds = maxSeconds > 0 ? Math.max(0, maxSeconds - seconds) : 0;
+
   useEffect(() => {
     const timer = setInterval(() => {
       setSeconds(prev => prev + 1);
     }, 1000);
     return () => clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    if (maxSeconds > 0 && seconds >= maxSeconds && !isSubmittedRef.current) {
+      isSubmittedRef.current = true;
+      stopSpeech();
+      setIsPlayingAudio(false);
+      setShowConfirmModal(false);
+      onFinishQuiz(answers, seconds, violationsCount);
+    }
+  }, [seconds, maxSeconds, answers, violationsCount, onFinishQuiz]);
 
   const currentQuestion = (questions && questions[currentIndex]) || (questions && questions[0]) || null;
   const currentAnswer = currentQuestion ? answers[currentQuestion.id] : undefined;
@@ -410,9 +425,18 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
             )}
 
             {/* Timer */}
-            <div className="flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl bg-slate-100 border border-slate-200 text-slate-800 font-mono text-xs sm:text-sm font-bold shadow-2xs">
+            <div
+              className={`flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl border font-mono text-xs sm:text-sm font-bold shadow-2xs ${
+                maxSeconds > 0 && remainingSeconds <= 60
+                  ? 'bg-rose-100 border-rose-300 text-rose-800 animate-pulse'
+                  : 'bg-slate-100 border-slate-200 text-slate-800'
+              }`}
+              title={maxSeconds > 0 ? `Batas Waktu Pengerjaan: ${timeLimitMinutes} Menit` : 'Waktu Pengerjaan'}
+            >
               <Clock className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-amber-600 animate-pulse" />
-              <span>{formatTime(seconds)}</span>
+              <span>
+                {maxSeconds > 0 ? `Sisa ${formatTime(remainingSeconds)}` : formatTime(seconds)}
+              </span>
             </div>
 
             {/* Progress summary */}

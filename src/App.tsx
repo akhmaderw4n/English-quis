@@ -4,8 +4,8 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { ViewState, StudentInfo, QuizSubmission, ViolationLockSession, QuizViolationRecord, Question, ProcedureTextConfig } from './types';
-import { QUIZ_QUESTIONS, QUIZ_METADATA, INITIAL_STUDENT_SUBMISSIONS, INITIAL_PROCEDURE_TEXT_CONFIG } from './data/quizData';
+import { ViewState, StudentInfo, QuizSubmission, ViolationLockSession, QuizViolationRecord, Question, ProcedureTextConfig, StudentRestrictionConfig } from './types';
+import { QUIZ_QUESTIONS, QUIZ_METADATA, INITIAL_STUDENT_SUBMISSIONS, INITIAL_PROCEDURE_TEXT_CONFIG, INITIAL_STUDENT_RESTRICTION_CONFIG } from './data/quizData';
 import { Navbar } from './components/Navbar';
 import { Footer } from './components/Footer';
 import { StartScreen } from './components/StartScreen';
@@ -15,6 +15,7 @@ import { TeacherDashboard } from './components/TeacherDashboard';
 import { TeacherPinModal } from './components/TeacherPinModal';
 import { ViolationScreen } from './components/ViolationScreen';
 import { ProcedureTextStudyModal } from './components/ProcedureTextStudyModal';
+import { StudentRestrictionPanel } from './components/StudentRestrictionPanel';
 import { isSoundEnabled, setSoundEnabled, playClickSound, stopSpeech, playViolationAlertSound } from './utils/audio';
 import {
   subscribeToSubmissions,
@@ -35,6 +36,8 @@ import {
   subscribeToProcedureText,
   saveProcedureTextToFirebase,
   resetProcedureTextInFirebase,
+  subscribeToStudentRestrictions,
+  saveStudentRestrictionsToFirebase,
   testConnection
 } from './services/firebase';
 
@@ -43,6 +46,8 @@ const STORAGE_KEY_PIN = 'en_nusantara_teacher_pin_v1';
 const STORAGE_KEY_VIOLATION = 'en_nusantara_active_violation_v1';
 const STORAGE_KEY_QUESTIONS = 'en_nusantara_quiz_questions_v1';
 const STORAGE_KEY_PROCEDURE_TEXT = 'en_nusantara_learning_material_v2';
+const STORAGE_KEY_STUDY_VIEWED_USERS = 'en_nusantara_study_viewed_users_v2';
+const STORAGE_KEY_STUDENT_RESTRICTIONS = 'en_nusantara_student_restrictions_v1';
 
 export default function App() {
   const [currentView, setCurrentView] = useState<ViewState>('start');
@@ -92,8 +97,106 @@ export default function App() {
     return INITIAL_PROCEDURE_TEXT_CONFIG;
   });
 
-  // Student study modal state
+  // Student study modal state & "1 User 1 Kali Lihat" tracking
   const [isProcedureStudyOpen, setIsProcedureStudyOpen] = useState(false);
+  const [isRestrictionModalOpen, setIsRestrictionModalOpen] = useState(false);
+  const [studentRestrictions, setStudentRestrictions] = useState<StudentRestrictionConfig>(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY_STUDENT_RESTRICTIONS);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') {
+          return { ...INITIAL_STUDENT_RESTRICTION_CONFIG, ...parsed };
+        }
+      }
+    } catch {}
+    return INITIAL_STUDENT_RESTRICTION_CONFIG;
+  });
+  const [draftStudent, setDraftStudent] = useState<StudentInfo>({
+    name: '',
+    studentClass: '7A',
+    studentNumber: '',
+  });
+
+  // Map of user keys who have already used their 1x view of the study module
+  // Special key '__unassigned_anonymous_view__' tracks if the current user viewed before typing their name
+  // Special key '__bound_anonymous_user__' stores the first user identity bound to that anonymous view
+  const [viewedStudyUsers, setViewedStudyUsers] = useState<Record<string, string>>(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY_STUDY_VIEWED_USERS);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') {
+          return parsed;
+        }
+      }
+    } catch {}
+    return {};
+  });
+
+  const buildStudentUserKey = (info: { name: string; studentClass: string; studentNumber: string }) => {
+    const cleanName = info.name.trim().toLowerCase();
+    const cleanClass = info.studentClass.trim().toUpperCase();
+    const cleanNum = info.studentNumber.trim();
+    if (!cleanName || !cleanNum) return '';
+    return `${cleanClass}_${cleanNum}_${cleanName}`;
+  };
+
+  // Check if the active user (draftStudent on StartScreen, or currentStudent in quiz/result) has already viewed the module 1 time
+  const activeUserInfo = currentView === 'start' ? draftStudent : (currentStudent || draftStudent);
+  const activeUserKey = buildStudentUserKey(activeUserInfo);
+
+  const isStudyModuleViewedByCurrentUser = (() => {
+    if (studentRestrictions.studyModuleAccessMode === 'locked') {
+      return true;
+    }
+    if (studentRestrictions.studyModuleAccessMode === 'unlimited') {
+      return false;
+    }
+    if (viewedStudyUsers['__unassigned_anonymous_view__']) {
+      return true;
+    }
+    if (activeUserKey) {
+      return Boolean(viewedStudyUsers[activeUserKey]);
+    }
+    // No complete student identity typed yet: if any user on this session already viewed without a new identity entered, keep locked
+    return Object.keys(viewedStudyUsers).length > 0;
+  })();
+
+  const handleResetStudyModuleViews = () => {
+    setViewedStudyUsers({});
+    try {
+      localStorage.removeItem(STORAGE_KEY_STUDY_VIEWED_USERS);
+    } catch {}
+  };
+
+  // Handler to open the study module (strictly 1 user = 1 kali lihat)
+  const handleOpenProcedureStudy = () => {
+    playClickSound();
+    if (isStudyModuleViewedByCurrentUser) {
+      return;
+    }
+
+    const nextMap = { ...viewedStudyUsers };
+    const nowIso = new Date().toISOString();
+
+    if (activeUserKey) {
+      nextMap[activeUserKey] = nowIso;
+    } else {
+      nextMap['__unassigned_anonymous_view__'] = nowIso;
+    }
+
+    setViewedStudyUsers(nextMap);
+    try {
+      localStorage.setItem(STORAGE_KEY_STUDY_VIEWED_USERS, JSON.stringify(nextMap));
+    } catch {}
+    setIsProcedureStudyOpen(true);
+  };
+
+  // Update draft student identity from StartScreen form
+  const handleUpdateDraftStudent = (info: StudentInfo) => {
+    setDraftStudent(info);
+  };
 
   // Ensure normal screen view on mount (clear any stuck lockouts and exit fullscreen)
   useEffect(() => {
@@ -190,12 +293,23 @@ export default function App() {
       }
     });
 
+    const unsubscribeRestrictions = subscribeToStudentRestrictions((cloudRestrictions) => {
+      if (cloudRestrictions) {
+        const merged = { ...INITIAL_STUDENT_RESTRICTION_CONFIG, ...cloudRestrictions };
+        setStudentRestrictions(merged);
+        try {
+          localStorage.setItem(STORAGE_KEY_STUDENT_RESTRICTIONS, JSON.stringify(merged));
+        } catch {}
+      }
+    });
+
     return () => {
       unsubscribeSubmissions();
       unsubscribePin();
       unsubscribeQuestions();
       unsubscribeViolations();
       unsubscribeProcedureText();
+      unsubscribeRestrictions();
     };
   }, []);
 
@@ -261,6 +375,19 @@ export default function App() {
     }
   };
 
+  // Update student attempt restrictions in memory, local storage, and Firestore
+  const handleUpdateStudentRestrictions = async (newConfig: StudentRestrictionConfig) => {
+    setStudentRestrictions(newConfig);
+    try {
+      localStorage.setItem(STORAGE_KEY_STUDENT_RESTRICTIONS, JSON.stringify(newConfig));
+    } catch {}
+    try {
+      await saveStudentRestrictionsToFirebase(newConfig);
+    } catch (err) {
+      console.warn('Notice: Could not sync student restrictions to Firestore:', err);
+    }
+  };
+
   // Sound toggle handler
   const handleToggleSound = () => {
     const nextState = !soundOn;
@@ -271,6 +398,16 @@ export default function App() {
   // Start Quiz
   const handleStartQuiz = (student: StudentInfo) => {
     setCurrentStudent(student);
+    setDraftStudent(student);
+    const key = buildStudentUserKey(student);
+    if (key && viewedStudyUsers['__unassigned_anonymous_view__']) {
+      const nextMap = { ...viewedStudyUsers, [key]: viewedStudyUsers['__unassigned_anonymous_view__'] };
+      delete nextMap['__unassigned_anonymous_view__'];
+      setViewedStudyUsers(nextMap);
+      try {
+        localStorage.setItem(STORAGE_KEY_STUDY_VIEWED_USERS, JSON.stringify(nextMap));
+      } catch {}
+    }
     setViolationSession(null);
     try {
       localStorage.removeItem(STORAGE_KEY_VIOLATION);
@@ -587,7 +724,8 @@ export default function App() {
           onToggleSound={handleToggleSound}
           studentName={currentStudent?.name}
           isDbConnected={isDbConnected}
-          onOpenProcedureStudy={() => setIsProcedureStudyOpen(true)}
+          onOpenProcedureStudy={handleOpenProcedureStudy}
+          isStudyLocked={isStudyModuleViewedByCurrentUser}
           onNormalizeScreen={handleNormalizeScreen}
         />
       </div>
@@ -598,8 +736,13 @@ export default function App() {
           <StartScreen
             onStartQuiz={handleStartQuiz}
             onOpenTeacherAuth={() => setIsTeacherAuthOpen(true)}
-            onOpenProcedureStudy={() => setIsProcedureStudyOpen(true)}
+            onOpenProcedureStudy={handleOpenProcedureStudy}
+            isStudyLocked={isStudyModuleViewedByCurrentUser}
+            onStudentDraftChange={handleUpdateDraftStudent}
             totalQuestions={questions.length}
+            restrictions={studentRestrictions}
+            submissions={submissions}
+            onOpenRestrictionMenu={() => setIsRestrictionModalOpen(true)}
           />
         )}
 
@@ -621,6 +764,7 @@ export default function App() {
             initialViolationsCount={violationSession ? violationSession.violationCount : 0}
             onViolationOccurred={handleViolationOccurred}
             resumedBannerNotice={resumedFromViolation}
+            timeLimitMinutes={studentRestrictions.timeLimitMinutes}
           />
         )}
 
@@ -641,6 +785,8 @@ export default function App() {
             onRetakeQuiz={handleRetakeQuiz}
             onGoHome={() => setCurrentView('start')}
             onOpenTeacherAuth={() => setIsTeacherAuthOpen(true)}
+            restrictions={studentRestrictions}
+            submissions={submissions}
           />
         )}
 
@@ -657,6 +803,9 @@ export default function App() {
             procedureTextConfig={procedureTextConfig}
             onUpdateProcedureText={handleUpdateProcedureText}
             onResetProcedureText={handleResetProcedureText}
+            studentRestrictions={studentRestrictions}
+            onUpdateStudentRestrictions={handleUpdateStudentRestrictions}
+            onResetStudyModuleViews={handleResetStudyModuleViews}
             currentPin={teacherPin}
             onChangePin={handleChangePin}
             onClearSubmissions={handleClearSubmissions}
@@ -670,6 +819,18 @@ export default function App() {
           />
         )}
       </main>
+
+      {/* Student Restriction Settings Modal (Accessible from StartScreen) */}
+      {isRestrictionModalOpen && (
+        <StudentRestrictionPanel
+          config={studentRestrictions}
+          submissions={submissions}
+          onUpdateConfig={handleUpdateStudentRestrictions}
+          onResetStudyModuleViews={handleResetStudyModuleViews}
+          isModal={true}
+          onCloseModal={() => setIsRestrictionModalOpen(false)}
+        />
+      )}
 
       {/* Student Procedure Text Study Material Modal */}
       <ProcedureTextStudyModal

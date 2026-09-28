@@ -1,4 +1,97 @@
-import { Question, QuizSubmission, ProcedureTextConfig, ProcedureTextRecipe } from '../types';
+import { Question, QuizSubmission, ProcedureTextConfig, ProcedureTextRecipe, StudentRestrictionConfig, StudentInfo } from '../types';
+
+export const ALL_CLASS_LIST = ['7A', '7B', '7C', '7D', '7E', '7F', '7G', '7H'];
+
+export const INITIAL_STUDENT_RESTRICTION_CONFIG: StudentRestrictionConfig = {
+  maxAttempts: 1, // Default: 1x pengerjaan per siswa
+  timeLimitMinutes: 0, // Default: Tanpa batas waktu
+  isQuizOpen: true,
+  allowedClasses: ['7A', '7B', '7C', '7D', '7E', '7F', '7G', '7H'],
+  allowRemedialIfBelowKKM: false,
+  allowReviewAfterQuiz: true,
+  studyModuleAccessMode: 'once_per_user',
+  extraAttemptGrants: {},
+};
+
+export function buildNormalizedStudentKey(student: { name: string; studentClass: string; studentNumber: string }): string {
+  const cleanClass = (student.studentClass || '').trim().toUpperCase();
+  const rawNum = (student.studentNumber || '').trim();
+  const numParsed = parseInt(rawNum, 10);
+  const cleanNum = !isNaN(numParsed) ? String(numParsed) : rawNum;
+  const cleanName = (student.name || '').trim().toLowerCase();
+  if (!cleanClass || (!cleanNum && !cleanName)) return '';
+  return `${cleanClass}_${cleanNum}_${cleanName}`;
+}
+
+export function getStudentAttemptStatus(
+  student: StudentInfo | null | undefined,
+  submissions: QuizSubmission[],
+  restrictions: StudentRestrictionConfig
+) {
+  const cleanName = (student?.name || '').trim().toLowerCase();
+  const cleanClass = (student?.studentClass || '').trim().toUpperCase();
+  const rawNum = (student?.studentNumber || '').trim();
+  const numParsed = parseInt(rawNum, 10);
+  const cleanNum = !isNaN(numParsed) ? String(numParsed) : rawNum;
+
+  const isIdentityComplete = Boolean(cleanName && cleanClass && cleanNum);
+  const studentKey = isIdentityComplete ? `${cleanClass}_${cleanNum}_${cleanName}` : '';
+
+  const matchingSubmissions = isIdentityComplete
+    ? submissions.filter((sub) => {
+        const sClass = (sub.studentClass || '').trim().toUpperCase();
+        const sRawNum = (sub.studentNumber || '').trim();
+        const sNumParsed = parseInt(sRawNum, 10);
+        const sNum = !isNaN(sNumParsed) ? String(sNumParsed) : sRawNum;
+        const sName = (sub.studentName || '').trim().toLowerCase();
+
+        if (sClass !== cleanClass) return false;
+        // Match by exact name in same class, or exact absen + name in same class
+        return (sName === cleanName && sNum === cleanNum) || sName === cleanName;
+      })
+    : [];
+
+  const attemptsUsed = matchingSubmissions.length;
+  const bestScore = matchingSubmissions.reduce((max, s) => Math.max(max, s.score), 0);
+  const lastSubmission = matchingSubmissions[0] || null;
+
+  const extraGrant = studentKey ? (restrictions.extraAttemptGrants?.[studentKey] || 0) : 0;
+  const remedialBonus =
+    restrictions.maxAttempts > 0 &&
+    restrictions.allowRemedialIfBelowKKM &&
+    attemptsUsed > 0 &&
+    bestScore < QUIZ_METADATA.passingScore
+      ? 1
+      : 0;
+
+  const effectiveMaxAttempts =
+    restrictions.maxAttempts > 0
+      ? restrictions.maxAttempts + extraGrant + remedialBonus
+      : 0; // 0 = unlimited
+
+  const remainingAttempts =
+    effectiveMaxAttempts > 0 ? Math.max(0, effectiveMaxAttempts - attemptsUsed) : Infinity;
+
+  const isQuotaExhausted = effectiveMaxAttempts > 0 && attemptsUsed >= effectiveMaxAttempts;
+  const isClassAllowed = !cleanClass || restrictions.allowedClasses.includes(cleanClass);
+  const canStartQuiz = restrictions.isQuizOpen && isClassAllowed && !isQuotaExhausted;
+
+  return {
+    isIdentityComplete,
+    studentKey,
+    matchingSubmissions,
+    attemptsUsed,
+    bestScore,
+    lastSubmission,
+    extraGrant,
+    remedialBonus,
+    effectiveMaxAttempts,
+    remainingAttempts,
+    isQuotaExhausted,
+    isClassAllowed,
+    canStartQuiz,
+  };
+}
 
 export const QUIZ_METADATA = {
   title: 'Interactive English Quiz: Introducing My self and other',

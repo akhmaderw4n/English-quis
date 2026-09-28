@@ -30,11 +30,6 @@ export const TeacherPinModal: React.FC<TeacherPinModalProps> = ({
     }
   };
 
-  const handleUseDefault = () => {
-    setPinInput(currentPin);
-    setErrorMsg('');
-  };
-
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
       <motion.div
@@ -90,20 +85,6 @@ export const TeacherPinModal: React.FC<TeacherPinModalProps> = ({
                 {showPin ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
               </button>
             </div>
-          </div>
-
-          {/* Default PIN Helper */}
-          <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-between text-xs">
-            <span className="text-amber-900">
-              PIN Default Sistem: <strong className="font-mono font-bold">{currentPin}</strong>
-            </span>
-            <button
-              type="button"
-              onClick={handleUseDefault}
-              className="text-[11px] font-bold text-amber-800 bg-amber-200/80 hover:bg-amber-200 px-2 py-0.5 rounded transition-colors"
-            >
-              Gunakan
-            </button>
           </div>
 
           {errorMsg && (

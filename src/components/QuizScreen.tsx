@@ -47,6 +47,7 @@ interface QuizScreenProps {
   }) => void;
   resumedBannerNotice?: boolean;
   timeLimitMinutes?: number;
+  shuffleQuestions?: boolean;
 }
 
 export const QuizScreen: React.FC<QuizScreenProps> = ({
@@ -64,15 +65,104 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
   onViolationOccurred,
   resumedBannerNotice = false,
   timeLimitMinutes = 0,
+  shuffleQuestions = true,
 }) => {
-  const [currentIndex, setCurrentIndex] = useState(initialIndex);
-  const [answers, setAnswers] = useState<Record<number, 'A' | 'B' | 'C' | 'D'>>(initialAnswers);
-  const [flagged, setFlagged] = useState<Record<number, boolean>>(initialFlagged);
-  const [seconds, setSeconds] = useState(initialSeconds);
+  const draftStorageKey = `en_nusantara_quiz_draft_${student.studentClass.trim().toUpperCase()}_${student.studentNumber.trim()}_${student.name.trim().toLowerCase()}`;
+
+  const savedDraft = React.useMemo(() => {
+    try {
+      const raw = localStorage.getItem(draftStorageKey);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') {
+          return parsed as {
+            currentIndex?: number;
+            answers?: Record<number, 'A' | 'B' | 'C' | 'D'>;
+            flagged?: Record<number, boolean>;
+            seconds?: number;
+            questionOrderIds?: number[];
+          };
+        }
+      }
+    } catch {}
+    return null;
+  }, [draftStorageKey]);
+
+  const [questionOrderIds] = useState<number[]>(() => {
+    const baseIds = questions.map((q) => q.id);
+    if (
+      savedDraft?.questionOrderIds &&
+      Array.isArray(savedDraft.questionOrderIds) &&
+      savedDraft.questionOrderIds.length === baseIds.length
+    ) {
+      return savedDraft.questionOrderIds;
+    }
+    if (!shuffleQuestions) {
+      return baseIds;
+    }
+    const arr = [...baseIds];
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+  });
+
+  const orderedQuestions = React.useMemo(() => {
+    const qMap = new Map(questions.map((q) => [q.id, q]));
+    const ordered: Question[] = [];
+    questionOrderIds.forEach((id) => {
+      const found = qMap.get(id);
+      if (found) {
+        ordered.push(found);
+        qMap.delete(id);
+      }
+    });
+    qMap.forEach((remaining) => ordered.push(remaining));
+    return ordered.length > 0 ? ordered : questions;
+  }, [questions, questionOrderIds]);
+
+  const hasRecoveredDraft = Boolean(
+    savedDraft &&
+      ((savedDraft.answers && Object.keys(savedDraft.answers).length > 0) ||
+        (savedDraft.seconds && savedDraft.seconds > 5))
+  );
+
+  const [currentIndex, setCurrentIndex] = useState<number>(() =>
+    hasRecoveredDraft && typeof savedDraft?.currentIndex === 'number'
+      ? Math.min(savedDraft.currentIndex, Math.max(0, questions.length - 1))
+      : initialIndex
+  );
+  const [answers, setAnswers] = useState<Record<number, 'A' | 'B' | 'C' | 'D'>>(() =>
+    hasRecoveredDraft && savedDraft?.answers ? savedDraft.answers : initialAnswers
+  );
+  const [flagged, setFlagged] = useState<Record<number, boolean>>(() =>
+    hasRecoveredDraft && savedDraft?.flagged ? savedDraft.flagged : initialFlagged
+  );
+  const [seconds, setSeconds] = useState<number>(() =>
+    hasRecoveredDraft && typeof savedDraft?.seconds === 'number' ? savedDraft.seconds : initialSeconds
+  );
   const [violationsCount, setViolationsCount] = useState(initialViolationsCount);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
-  const [showResumedToast, setShowResumedToast] = useState(resumedBannerNotice);
+  const [showResumedToast, setShowResumedToast] = useState(resumedBannerNotice || hasRecoveredDraft);
   const isSubmittedRef = useRef(false);
+
+  // Auto-save quiz progress to localStorage on every change
+  useEffect(() => {
+    if (isSubmittedRef.current) return;
+    try {
+      localStorage.setItem(
+        draftStorageKey,
+        JSON.stringify({
+          currentIndex,
+          answers,
+          flagged,
+          seconds,
+          questionOrderIds,
+        })
+      );
+    } catch {}
+  }, [draftStorageKey, currentIndex, answers, flagged, seconds, questionOrderIds]);
 
   // Audio Playback states for listening questions
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
@@ -125,17 +215,20 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
   useEffect(() => {
     if (maxSeconds > 0 && seconds >= maxSeconds && !isSubmittedRef.current) {
       isSubmittedRef.current = true;
+      try {
+        localStorage.removeItem(draftStorageKey);
+      } catch {}
       stopSpeech();
       setIsPlayingAudio(false);
       setShowConfirmModal(false);
       onFinishQuiz(answers, seconds, violationsCount);
     }
-  }, [seconds, maxSeconds, answers, violationsCount, onFinishQuiz]);
+  }, [seconds, maxSeconds, answers, violationsCount, onFinishQuiz, draftStorageKey]);
 
-  const currentQuestion = (questions && questions[currentIndex]) || (questions && questions[0]) || null;
+  const currentQuestion = (orderedQuestions && orderedQuestions[currentIndex]) || (orderedQuestions && orderedQuestions[0]) || null;
   const currentAnswer = currentQuestion ? answers[currentQuestion.id] : undefined;
   const answeredCount = Object.keys(answers).length;
-  const isAllAnswered = questions.length > 0 && answeredCount === questions.length;
+  const isAllAnswered = orderedQuestions.length > 0 && answeredCount === orderedQuestions.length;
 
   // Auto-play audio when arriving at a question with audio enabled
   useEffect(() => {
@@ -236,7 +329,7 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
     playClickSound();
     stopSpeech();
     setIsPlayingAudio(false);
-    if (currentIndex < questions.length - 1) {
+    if (currentIndex < orderedQuestions.length - 1) {
       setCurrentIndex(currentIndex + 1);
     }
   };
@@ -264,6 +357,9 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
 
   const handleConfirmSubmit = () => {
     isSubmittedRef.current = true;
+    try {
+      localStorage.removeItem(draftStorageKey);
+    } catch {}
     stopSpeech();
     setIsPlayingAudio(false);
     setShowConfirmModal(false);
@@ -441,7 +537,7 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
 
             {/* Progress summary */}
             <div className="text-[11px] sm:text-xs font-bold px-2.5 sm:px-3 py-1.5 rounded-xl bg-amber-50 text-amber-900 border border-amber-200 shadow-2xs">
-              <span className="text-amber-700">{answeredCount}</span>/{questions.length} Terjawab
+              <span className="text-amber-700">{answeredCount}</span>/{orderedQuestions.length} Terjawab
             </div>
           </div>
         </div>
@@ -450,7 +546,7 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
         <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
           <div 
             className="bg-gradient-to-r from-amber-500 to-emerald-500 h-full transition-all duration-300 rounded-full"
-            style={{ width: `${(answeredCount / questions.length) * 100}%` }}
+            style={{ width: `${(answeredCount / orderedQuestions.length) * 100}%` }}
           />
         </div>
       </div>
@@ -459,7 +555,7 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
       <div className="bg-white rounded-2xl p-3 sm:p-4 border border-slate-200 mb-4 sm:mb-6 shadow-2xs">
         <div className="flex items-center justify-between mb-2.5 px-1">
           <span className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
-            <span>Nomor Soal ({currentIndex + 1} dari {questions.length}):</span>
+            <span>Nomor Soal ({currentIndex + 1} dari {orderedQuestions.length}){shuffleQuestions ? ' • Diacak' : ''}:</span>
           </span>
           <span className="text-[11px] text-slate-400 flex items-center gap-1">
             <Headphones className="w-3 h-3 text-amber-600" />
@@ -467,7 +563,7 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
           </span>
         </div>
         <div className="grid grid-cols-5 sm:grid-cols-10 gap-1.5 sm:gap-2">
-          {questions.map((q, idx) => {
+          {orderedQuestions.map((q, idx) => {
             const isCurrent = idx === currentIndex;
             const isAnswered = !!answers[q.id];
             const isFlagged = !!flagged[q.id];
@@ -685,7 +781,7 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
             <div className="flex items-center justify-between gap-1.5 mb-2">
               <div className="flex items-center gap-1.5 font-bold text-xs text-amber-900 uppercase tracking-wider">
                 <BookOpen className="w-3.5 h-3.5 text-amber-700 shrink-0" />
-                <span className="truncate">{currentQuestion.contextTitle || 'Teks Rujukan Resep (English for Nusantara)'}</span>
+                <span className="truncate">{currentQuestion.contextTitle || 'Teks Bacaan (English for Nusantara)'}</span>
               </div>
               <button
                 type="button"
@@ -764,7 +860,7 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
         </button>
 
         <div className="flex-1 sm:flex-initial flex items-center justify-end">
-          {currentIndex < questions.length - 1 ? (
+          {currentIndex < orderedQuestions.length - 1 ? (
             <button
               type="button"
               onClick={handleNext}
@@ -809,7 +905,7 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
               <div className="bg-slate-50 p-3.5 rounded-xl text-xs space-y-1.5 mb-5 border border-slate-200">
                 <div className="flex justify-between">
                   <span className="text-slate-600">Total Soal:</span>
-                  <span className="font-bold text-slate-800">{questions.length} Soal</span>
+                  <span className="font-bold text-slate-800">{orderedQuestions.length} Soal</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-slate-600">Sudah Dijawab:</span>
@@ -818,7 +914,7 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
                 {!isAllAnswered && (
                   <div className="flex justify-between text-rose-600 font-semibold">
                     <span>Belum Dijawab:</span>
-                    <span>{QUIZ_QUESTIONS.length - answeredCount} Soal</span>
+                    <span>{orderedQuestions.length - answeredCount} Soal</span>
                   </div>
                 )}
                 <div className="flex justify-between">

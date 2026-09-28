@@ -11,15 +11,24 @@ export const INITIAL_STUDENT_RESTRICTION_CONFIG: StudentRestrictionConfig = {
   allowReviewAfterQuiz: true,
   studyModuleAccessMode: 'once_per_user',
   extraAttemptGrants: {},
+  shuffleQuestions: true,
+  lockByClassAndNumber: true,
+  viewedStudyModuleMap: {},
 };
 
-export function buildNormalizedStudentKey(student: { name: string; studentClass: string; studentNumber: string }): string {
+export function buildNormalizedStudentKey(
+  student: { name: string; studentClass: string; studentNumber: string },
+  lockByClassAndNumber: boolean = true
+): string {
   const cleanClass = (student.studentClass || '').trim().toUpperCase();
   const rawNum = (student.studentNumber || '').trim();
   const numParsed = parseInt(rawNum, 10);
   const cleanNum = !isNaN(numParsed) ? String(numParsed) : rawNum;
   const cleanName = (student.name || '').trim().toLowerCase();
   if (!cleanClass || (!cleanNum && !cleanName)) return '';
+  if (lockByClassAndNumber && cleanNum) {
+    return `${cleanClass}_${cleanNum}`;
+  }
   return `${cleanClass}_${cleanNum}_${cleanName}`;
 }
 
@@ -35,7 +44,11 @@ export function getStudentAttemptStatus(
   const cleanNum = !isNaN(numParsed) ? String(numParsed) : rawNum;
 
   const isIdentityComplete = Boolean(cleanName && cleanClass && cleanNum);
-  const studentKey = isIdentityComplete ? `${cleanClass}_${cleanNum}_${cleanName}` : '';
+  const lockBySeat = restrictions.lockByClassAndNumber !== false;
+  const studentKey = isIdentityComplete
+    ? buildNormalizedStudentKey({ name: cleanName, studentClass: cleanClass, studentNumber: cleanNum }, lockBySeat)
+    : '';
+  const legacyKey = isIdentityComplete ? `${cleanClass}_${cleanNum}_${cleanName}` : '';
 
   const matchingSubmissions = isIdentityComplete
     ? submissions.filter((sub) => {
@@ -46,7 +59,10 @@ export function getStudentAttemptStatus(
         const sName = (sub.studentName || '').trim().toLowerCase();
 
         if (sClass !== cleanClass) return false;
-        // Match by exact name in same class, or exact absen + name in same class
+        if (lockBySeat) {
+          // Match either same attendance number in the same class OR exact same student name in the same class
+          return sNum === cleanNum || sName === cleanName;
+        }
         return (sName === cleanName && sNum === cleanNum) || sName === cleanName;
       })
     : [];
@@ -55,7 +71,12 @@ export function getStudentAttemptStatus(
   const bestScore = matchingSubmissions.reduce((max, s) => Math.max(max, s.score), 0);
   const lastSubmission = matchingSubmissions[0] || null;
 
-  const extraGrant = studentKey ? (restrictions.extraAttemptGrants?.[studentKey] || 0) : 0;
+  const extraGrant =
+    studentKey
+      ? (restrictions.extraAttemptGrants?.[studentKey] ??
+         restrictions.extraAttemptGrants?.[legacyKey] ??
+         0)
+      : 0;
   const remedialBonus =
     restrictions.maxAttempts > 0 &&
     restrictions.allowRemedialIfBelowKKM &&
@@ -313,193 +334,203 @@ export const PROCEDURE_TEXT_SUMMARY = {
 export const QUIZ_QUESTIONS: Question[] = [
   {
     id: 1,
-    topic: 'Social Function / Purpose of Procedure Text',
-    unitReference: 'Chapter 2: Culinary and Me (Unit 3: Section 1)',
+    topic: 'Introducing Myself (Personal Identity)',
+    unitReference: 'Chapter 1: Introducing My Self and Other (Unit 1: Galang from Kalimantan)',
     hasAudio: true,
-    audioTitle: 'Audio 2.1: Listening - How to Make Sweet Potato Fritters',
-    listeningInstruction: 'Dengarkan pembacaan teks resep ini dengan saksama, lalu tentukan tujuan komunikatif (social function) dari teks tersebut.',
-    audioScript: 'How to Make Sweet Potato Fritters. Ingredients: two sweet potatoes, one cup of flour, two tablespoons of sugar, cooking oil. Steps: First, peel the sweet potatoes and wash them. Next, cut them into thin slices and coat them with flour batter. Then, fry them in hot cooking oil until crispy. Finally, serve the fritters while warm. Question: What is the primary social function of the procedure text above?',
+    audioTitle: 'Audio 1.1: Listening - Galang\'s Self-Introduction',
+    listeningInstruction: 'Dengarkan perkenalan diri Galang dengan saksama, lalu tentukan informasi yang tepat mengenai identitas Galang.',
+    audioScript: 'Hello, everyone! Good morning. Let me introduce myself. My full name is Galang Pratama, and you can call me Galang. I am from Banjarbaru, South Kalimantan. Right now, I live on Jalan Sumatera. I am thirteen years old, and my hobby is fishing. Nice to meet you all! Question: Where is Galang originally from and what is his hobby?',
     contextTitle: 'Text for Question 1',
-    contextText: `How to Make Sweet Potato Fritters\nIngredients: 2 sweet potatoes, 1 cup of flour, 2 tablespoons of sugar, cooking oil.\nSteps:\n1. First, peel the sweet potatoes and wash them.\n2. Next, cut them into thin slices and coat them with flour batter.\n3. Then, fry them in hot cooking oil until crispy.\n4. Finally, serve the fritters while warm.`,
-    question: 'What is the primary social function (purpose) of the procedure text above?',
+    contextText: `"Hello, everyone! Good morning. Let me introduce myself. My full name is Galang Pratama, and you can call me Galang. I am from Banjarbaru, South Kalimantan. Right now, I live on Jalan Sumatera. I am thirteen years old, and my hobby is fishing. Nice to meet you all!"`,
+    question: 'Based on the self-introduction text above, where is Galang from and what is his hobby?',
     options: [
-      { key: 'A', text: 'To entertain readers with an amusing fiction story about sweet potatoes' },
-      { key: 'B', text: 'To describe what a traditional food market looks like in Indonesia' },
-      { key: 'C', text: 'To explain step-by-step how to make sweet potato fritters' },
-      { key: 'D', text: 'To persuade people to buy cooking oil and flour at a supermarket' },
+      { key: 'A', text: 'He is from Medan and his hobby is reading novels' },
+      { key: 'B', text: 'He is from Pontianak and his hobby is playing badminton' },
+      { key: 'C', text: 'He is from Kalimantan and his hobby is fishing' },
+      { key: 'D', text: 'He is from Jakarta and his hobby is cycling' },
     ],
     correctAnswer: 'C',
-    explanation: 'Tujuan utama (social function / goal) dari teks prosedur resep makanan adalah memberikan instruksi langkah demi langkah kepada pembaca tentang cara membuat makanan tersebut (to explain step-by-step how to make sweet potato fritters).'
+    explanation: 'Berdasarkan teks perkenalan Galang: "I am from Banjarbaru, South Kalimantan... and my hobby is fishing", maka Galang berasal dari Kalimantan dan hobinya adalah memancing (fishing).'
   },
   {
     id: 2,
-    topic: 'Generic Structure of a Recipe',
-    unitReference: 'Chapter 2: Culinary and Me (Unit 3: Section 2 - Ingredients vs Tools)',
+    topic: 'Prepositions of Place & Address (from, in, on, at)',
+    unitReference: 'Chapter 1: Introducing My Self and Other (Unit 1: Language Focus - Prepositions)',
     hasAudio: true,
-    audioTitle: 'Audio 2.2: Listening - Recipe Component Identification',
-    listeningInstruction: 'Dengarkan rincian komponen resep Galang, lalu tentukan bagian struktur generik teks prosedur tersebut.',
-    audioScript: 'Recipe for Galang\'s Favorite Banana Fritters: four ripe bananas, one cup of flour, one tablespoon of sugar, half teaspoon of salt, two hundred milliliters of water, cooking oil. In the generic structure of a procedure text, what is this list called?',
-    contextTitle: 'Recipe Component',
-    contextText: `Recipe for Galang's Favorite Banana Fritters:\n• 4 ripe bananas\n• 1 cup of flour\n• 1 tablespoon of sugar\n• 1/2 teaspoon of salt\n• 200 ml of water\n• Cooking oil`,
-    question: 'In the generic structure of a procedure text, the list shown above is called ...',
+    audioTitle: 'Audio 1.2: Listening - Stating Home Address',
+    listeningInstruction: 'Dengarkan kalimat perkenalan alamat tempat tinggal berikut, lalu pilih kata depan (preposition) yang paling tepat.',
+    audioScript: 'Listen to the sentence carefully: Hello, my name is Andre. I am from Pontianak, and now I live blank Jalan Teratai near SMP Merdeka. Which preposition is correct to fill in the blank: from, on, at, or under?',
+    contextTitle: 'Sentence Completion',
+    contextText: `"Hello, my name is Andre. I am from Pontianak, and now I live __________ Jalan Teratai near SMP Merdeka."`,
+    question: 'Which preposition of place best completes the sentence above when stating a street name without a house number?',
     options: [
-      { key: 'A', text: 'Goal / Aim' },
-      { key: 'B', text: 'Ingredients / Materials' },
-      { key: 'C', text: 'Cooking Tools / Utensils' },
-      { key: 'D', text: 'Steps / Instructions' },
+      { key: 'A', text: 'in' },
+      { key: 'B', text: 'on' },
+      { key: 'C', text: 'at' },
+      { key: 'D', text: 'from' },
     ],
     correctAnswer: 'B',
-    explanation: 'Daftar bahan makanan yang diperlukan untuk mengolah suatu hidangan disebut "Ingredients" (bahan-bahan). "Tools" adalah peralatan memasak (wajan, sutil), sedangkan "Steps" adalah langkah pembuatannya.'
+    explanation: 'Dalam Bahasa Inggris, untuk menyebutkan nama jalan tanpa nomor rumah digunakan preposisi "on" (contoh: "on Jalan Teratai" / "on Jalan Sumatera"). "in" digunakan untuk nama kota/negara, sedangkan "at" digunakan untuk alamat lengkap dengan nomor rumah.'
   },
   {
     id: 3,
-    topic: 'Cooking Utensils / Tools Identification',
-    unitReference: 'Chapter 2: Culinary and Me (Unit 3: Worksheet 2.24)',
+    topic: 'Introducing Others (Memperkenalkan Teman)',
+    unitReference: 'Chapter 1: Introducing My Self and Other (Unit 1: Section 2 - Introducing Others)',
     hasAudio: true,
-    audioTitle: 'Audio 2.3: Listening - Kitchen Scenario & Utensils',
-    listeningInstruction: 'Dengarkan situasi memasak Galang di dapur dan pilihlah peralatan memasak yang paling tepat.',
-    audioScript: 'Galang is frying banana fritters in a frying pan. He needs to flip the fritters over so that both sides cook evenly without burning his hands. Which kitchen tool should he use? A peeler, a spatula, a measuring spoon, or a rolling pin?',
-    question: 'Galang is frying banana fritters in a frying pan. He needs to flip the fritters over so that both sides cook evenly without burning his hands. Which kitchen tool should he use?',
+    audioTitle: 'Audio 1.3: Listening - Introducing a Classmate',
+    listeningInstruction: 'Dengarkan percakapan saat Galang memperkenalkan Andre kepada Monita, lalu pilih respons yang paling tepat.',
+    audioScript: 'Galang says: Hi, Monita! Let me introduce my new friend. This is Andre. Andre says: Hello, Monita! Nice to meet you. What is the best response for Monita to say?',
+    contextTitle: 'Dialogue: Introducing a Friend',
+    contextText: `Galang : "Hi, Monita! Let me introduce my new friend. This is Andre."\nAndre  : "Hello, Monita! Nice to meet you."\nMonita : "________________________________________"`,
+    question: 'What is the most appropriate response for Monita to complete the dialogue above?',
     options: [
-      { key: 'A', text: 'A peeler' },
-      { key: 'B', text: 'A spatula' },
-      { key: 'C', text: 'A measuring spoon' },
-      { key: 'D', text: 'A rolling pin' },
+      { key: 'A', text: 'See you tomorrow morning, Galang.' },
+      { key: 'B', text: 'Hi, Andre! Nice to meet you too.' },
+      { key: 'C', text: 'I am thirteen years old, thank you.' },
+      { key: 'D', text: 'My favorite food is Indonesian fried rice.' },
     ],
     correctAnswer: 'B',
-    explanation: 'Alat dapur yang digunakan untuk membalik (flip/turn) atau mengaduk makanan di wajan penggorengan adalah "a spatula" (sudip/sutil). "Peeler" untuk mengupas kulit buah/sayur, "measuring spoon" untuk menakar bumbu.'
+    explanation: 'Ketika seseorang menyapa saat berkenalan dengan ucapan "Hello, Monita! Nice to meet you" (Senang bertemu denganmu), respons yang paling tepat dan sopan adalah "Hi, Andre! Nice to meet you too." (Senang bertemu denganmu juga).'
   },
   {
     id: 4,
-    topic: 'Cooking Action Verbs (Vocabulary)',
-    unitReference: 'Chapter 2: Culinary and Me (Unit 3: Worksheet 2.27)',
+    topic: 'Pronouns & Possessive Adjectives (My, Your, His, Her)',
+    unitReference: 'Chapter 1: Introducing My Self and Other (Unit 1: Language Focus - Pronouns)',
     hasAudio: true,
-    audioTitle: 'Audio 2.4: Listening - Action Verb in Recipe Step',
-    listeningInstruction: 'Dengarkan pelafalan kalimat instruksi memasak ini dan cermati arti kata kerja aksi yang digunakan.',
-    audioScript: 'Listen to the instruction: First, peel the sweet potatoes and wash them thoroughly with running water. What does the action verb peel mean in Indonesian?',
-    contextTitle: 'Action Verb in Step 1',
-    contextText: `"First, peel the sweet potatoes and wash them thoroughly with running water."`,
-    question: 'What does the action verb "peel" mean in Indonesian?',
+    audioTitle: 'Audio 1.4: Listening - Possessive Adjectives in Introduction',
+    listeningInstruction: 'Dengarkan kalimat yang memperkenalkan Monita berikut, lalu tentukan kata ganti kepemilikan (possessive adjective) yang benar.',
+    audioScript: 'Listen to the sentence: Monita is my classmate in Class 7A. Blank hobby is reading science-fiction novels in the school library. Which word correctly completes the sentence: Her, His, Their, or Our?',
+    contextTitle: 'Grammar Focus: Possessive Adjective',
+    contextText: `"Monita is my classmate in Class 7A. __________ hobby is reading science-fiction novels in the school library."`,
+    question: 'Choose the correct possessive adjective to complete the sentence above:',
     options: [
-      { key: 'A', text: 'Mengupas kulit luar buah atau umbi' },
-      { key: 'B', text: 'Mengiris bahan menjadi potongan tipis' },
-      { key: 'C', text: 'Mengaduk rata adonan dengan sendok' },
-      { key: 'D', text: 'Menggoreng bahan di dalam minyak panas' },
+      { key: 'A', text: 'Her' },
+      { key: 'B', text: 'His' },
+      { key: 'C', text: 'Their' },
+      { key: 'D', text: 'He' },
     ],
     correctAnswer: 'A',
-    explanation: 'Kata kerja "peel" artinya mengupas kulit luar (to remove the outer skin). Mengiris adalah "slice", mengaduk adalah "stir/mix", dan menggoreng adalah "fry".'
+    explanation: 'Karena subjek yang dibicarakan adalah Monita (satu orang perempuan / She), maka kata ganti kepemilikan (possessive adjective) yang diikuti kata benda "hobby" adalah "Her" (Her hobby = hobinya).'
   },
   {
     id: 5,
-    topic: 'Sequence Adverbs (Connectors)',
-    unitReference: 'Chapter 2: Culinary and Me (Unit 3: Section 4 - Sequencing Steps)',
+    topic: 'Asking & Telling About Hobbies (Unit 2: I Love Fishing)',
+    unitReference: 'Chapter 1: Introducing My Self and Other (Unit 2: Hobbies & Equipment)',
     hasAudio: true,
-    audioTitle: 'Audio 2.5: Listening - Sequence Adverbs in Recipe',
-    listeningInstruction: 'Dengarkan penjelasan tentang sequence adverbs dan tentukan kata penghubung untuk langkah paling akhir.',
-    audioScript: 'When writing cooking steps, we use sequence adverbs such as First, Next, Then, and After that. Which sequence word is the most appropriate to introduce the very last step in a recipe?',
-    question: 'When writing cooking steps, we use sequence adverbs such as "First", "Next", "Then", and "After that". Which sequence word is the most appropriate to introduce the very LAST step in a recipe?',
+    audioTitle: 'Audio 1.5: Listening - Hobby and Equipment',
+    listeningInstruction: 'Dengarkan cerita tentang hobi Sinta dan Ibu Posma, lalu tentukan peralatan yang mereka gunakan.',
+    audioScript: 'Sinta and Ibu Posma love playing badminton together twice a week. Before playing on the court, they always prepare their sports equipment. What equipment do Sinta and Ibu Posma need to play badminton?',
+    contextTitle: 'Text for Question 5',
+    contextText: `"Sinta and Ibu Posma love playing badminton together twice a week. Before playing on the court, they always prepare their sports equipment."`,
+    question: 'What equipment do Sinta and Ibu Posma need to do their hobby?',
     options: [
-      { key: 'A', text: 'First' },
-      { key: 'B', text: 'Then' },
-      { key: 'C', text: 'Finally' },
-      { key: 'D', text: 'Before' },
+      { key: 'A', text: 'A fishing rod, a small bucket, and fish bait' },
+      { key: 'B', text: 'A bicycle, a helmet, and cycling shoes' },
+      { key: 'C', text: 'A racket and a shuttlecock' },
+      { key: 'D', text: 'A paintbrush, canvas, and watercolors' },
     ],
     correctAnswer: 'C',
-    explanation: 'Kata penghubung urutan (sequence adverb) yang digunakan secara khusus untuk menandai langkah terakhir atau penutup resep adalah "Finally" (Akhirnya/Terakhir), misalnya: "Finally, serve the fried rice on a plate."'
+    explanation: 'Hobi Sinta dan Ibu Posma adalah bermain bulu tangkis ("playing badminton"). Peralatan yang dibutuhkan untuk bermain bulu tangkis adalah raket dan kok ("a racket and a shuttlecock").'
   },
   {
     id: 6,
-    topic: 'Reading Comprehension & Step Ordering',
-    unitReference: 'Chapter 2: Culinary and Me (Unit 2 & 3: Banana Fritters Recipe)',
+    topic: 'Simple Present Tense & Gerund in Hobbies',
+    unitReference: 'Chapter 1: Introducing My Self and Other (Unit 2: Language Focus)',
     hasAudio: true,
-    audioTitle: 'Audio 2.6: Listening - Galang\'s Crispy Banana Fritters Steps',
-    listeningInstruction: 'Dengarkan seluruh tahapan memasak pisang goreng renyah Galang dan tentukan langkah setelah mencelupkan pisang.',
-    audioScript: 'Galang\'s Crispy Banana Fritters. Steps: First, peel the bananas and cut each banana in half. Next, mix flour, water, and sugar in a bowl to make a smooth batter. Then, dip the sliced bananas into the batter until well coated. After that, fry them in hot cooking oil until golden brown. Finally, place the fritters on a plate and sprinkle grated cheese on top. Question: Based on the recipe, what must we do immediately after dipping the sliced bananas into the batter?',
-    contextTitle: 'Galang\'s Crispy Banana Fritters',
-    contextText: `Steps:\n1. First, peel the bananas and cut each banana in half.\n2. Next, mix flour, water, and sugar in a bowl to make a smooth batter.\n3. Then, dip the sliced bananas into the batter until well coated.\n4. After that, fry them in hot cooking oil until golden brown.\n5. Finally, place the fritters on a plate and sprinkle grated cheese on top.`,
-    question: 'Based on the recipe above, what must we do immediately AFTER dipping the sliced bananas into the batter?',
+    audioTitle: 'Audio 1.6: Listening - Expressing Hobbies & Likes',
+    listeningInstruction: 'Dengarkan kalimat tentang hobi Andre di waktu luang dan pilih bentuk kata kerja yang tepat.',
+    audioScript: 'Andre has two favorite activities in his free time. He really likes blank his red bicycle around the neighborhood every afternoon. Choose the correct word to complete the sentence: ride, rides, riding, or rode.',
+    contextTitle: 'Expressing Likes and Hobbies',
+    contextText: `"Andre has two favorite activities in his free time. He really likes __________ his red bicycle around the neighborhood every afternoon."`,
+    question: 'Which verb form correctly completes the sentence after the verb "likes"?',
     options: [
-      { key: 'A', text: 'Cut each banana into two equal halves' },
-      { key: 'B', text: 'Sprinkle grated cheese on top of the bananas' },
-      { key: 'C', text: 'Fry them in hot cooking oil until golden brown' },
-      { key: 'D', text: 'Mix flour and sugar in a large glass bowl' },
+      { key: 'A', text: 'ride' },
+      { key: 'B', text: 'rides' },
+      { key: 'C', text: 'riding' },
+      { key: 'D', text: 'rode' },
     ],
     correctAnswer: 'C',
-    explanation: 'Pada langkah ke-3: "dip the sliced bananas into the batter", langkah yang tepat berikutnya (langkah ke-4) adalah: "After that, fry them in hot cooking oil until golden brown".'
+    explanation: 'Setelah kata kerja kesukaan seperti "like / likes / love / loves / enjoy / enjoys", kata kerja berikutnya berbentuk Gerund (Verb-ing), sehingga jawaban yang tepat adalah "riding" (He really likes riding his red bicycle).'
   },
   {
     id: 7,
-    topic: 'Imperative Sentences & Cooking Verbs',
-    unitReference: 'Chapter 2: Culinary and Me (Unit 3: Language Focus - Action Verbs)',
+    topic: 'Social Function of Descriptive Text (Describing People)',
+    unitReference: 'Chapter 1: Introducing My Self and Other (Unit 3: My Friends and I)',
     hasAudio: true,
-    audioTitle: 'Audio 2.7: Listening - Cooking Instruction with Missing Verb',
-    listeningInstruction: 'Dengarkan kalimat instruksi memasak rumpang berikut dan tentukan kata kerja yang paling tepat.',
-    audioScript: 'Listen carefully to the missing instruction: blank, the cooking oil into the frying pan, then heat it over medium flame. Choose the most appropriate action verb: Pour, Chop, Grate, or Peel?',
-    question: 'Choose the most appropriate action verb to complete the instruction below:\n\n"__________ the cooking oil into the frying pan, then heat it over medium flame."',
+    audioTitle: 'Audio 1.7: Listening - Descriptive Text about Monita',
+    listeningInstruction: 'Dengarkan pembacaan teks deskriptif tentang Monita berikut, lalu tentukan tujuan komunikatif (social function) dari teks tersebut.',
+    audioScript: 'Monita is my classmate in Class 7A at SMP Merdeka. She is a tall and slim girl. She wears a neat hijab and prescription glasses. Monita is very diligent, polite, and friendly to everyone. She loves reading novels in the library. Question: What is the social function of the text above?',
+    contextTitle: 'Descriptive Text: My Classmate, Monita',
+    contextText: `Monita is my classmate in Class 7A at SMP Merdeka. She is a tall and slim girl. She wears a neat hijab and prescription glasses. Monita is very diligent, polite, and friendly to everyone. She loves reading novels in the library.`,
+    question: 'What is the main social function (purpose) of the descriptive text above?',
     options: [
-      { key: 'A', text: 'Pour' },
-      { key: 'B', text: 'Chop' },
-      { key: 'C', text: 'Grate' },
-      { key: 'D', text: 'Peel' },
+      { key: 'A', text: 'To describe Monita\'s physical appearance, personality, and hobby specifically' },
+      { key: 'B', text: 'To explain step-by-step how to borrow a novel from the school library' },
+      { key: 'C', text: 'To tell a past story about Monita\'s holiday last year' },
+      { key: 'D', text: 'To persuade students to buy new prescription glasses' },
     ],
     correctAnswer: 'A',
-    explanation: 'Kata kerja "Pour" artinya menuangkan (digunakan untuk benda cair seperti minyak goreng/air). "Chop" artinya mencincang, "Grate" artinya memarut, dan "Peel" artinya mengupas.'
+    explanation: 'Teks di atas adalah Descriptive Text yang bertujuan untuk mendeskripsikan ciri fisik (tall, slim, wears a hijab and glasses), sifat (diligent, polite, friendly), dan hobi Monita secara spesifik.'
   },
   {
     id: 8,
-    topic: 'Kitchen Tools & Utensils in English for Nusantara',
-    unitReference: 'Chapter 2: Culinary and Me (Unit 3: Worksheet 2.27 - Sweet Potato Fritters)',
+    topic: 'Generic Structure of Descriptive Text (Identification & Description)',
+    unitReference: 'Chapter 1: Introducing My Self and Other (Unit 3: Generic Structure)',
     hasAudio: true,
-    audioTitle: 'Audio 2.8: Listening - Draining Excess Cooking Oil',
-    listeningInstruction: 'Dengarkan situasi Monita yang ingin meniriskan minyak goreng dari gorengan ubi.',
-    audioScript: 'After frying the sweet potato fritters, Monita wants to separate the fritters from excess cooking oil so they stay crispy and not greasy. What tool should she use to drain the oil? A sieve or strainer, a rolling pin, a gas stove, or a refrigerator?',
-    question: 'After frying the sweet potato fritters, Monita wants to separate the fritters from excess cooking oil so they stay crispy and not greasy. What tool should she use to drain the oil?',
+    audioTitle: 'Audio 1.8: Listening - Generic Structure of Descriptive Text',
+    listeningInstruction: 'Dengarkan paragraf pertama dari teks deskriptif tentang Made, lalu tentukan nama bagian struktur teksnya.',
+    audioScript: 'Paragraph 1: Let me tell you about my best friend, Made. He is fourteen years old, and he is my classmate in Class 7A at SMP Merdeka. In the generic structure of a descriptive text, what is this opening paragraph called?',
+    contextTitle: 'Paragraph 1 of Descriptive Text',
+    contextText: `Paragraph 1:\n"Let me tell you about my best friend, Made. He is fourteen years old, and he is my classmate in Class 7A at SMP Merdeka."`,
+    question: 'In the generic structure of a Descriptive Text, the opening paragraph that introduces who the person is (shown above) is called ...',
     options: [
-      { key: 'A', text: 'A sieve or strainer' },
-      { key: 'B', text: 'A rolling pin' },
-      { key: 'C', text: 'A gas stove' },
-      { key: 'D', text: 'A refrigerator' },
+      { key: 'A', text: 'Identification' },
+      { key: 'B', text: 'Description' },
+      { key: 'C', text: 'Ingredients' },
+      { key: 'D', text: 'Resolution' },
     ],
     correctAnswer: 'A',
-    explanation: 'Alat dapur berupa saringan kawat ("a sieve" atau "strainer") digunakan untuk meniriskan minyak (to drain excess cooking oil) setelah makanan digoreng.'
+    explanation: 'Struktur Descriptive Text terdiri dari 2 bagian utama: (1) "Identification" yaitu bagian pembuka yang memperkenalkan siapa objek/orang yang dideskripsikan, dan (2) "Description" yaitu bagian rincian ciri fisik, sifat, serta kebiasaan.'
   },
   {
     id: 9,
-    topic: 'Grammar - Identifying Imperative Sentences (Kalimat Perintah)',
-    unitReference: 'Chapter 2: Culinary and Me (Unit 3: Language Focus)',
+    topic: 'Describing Physical Appearance (To Be vs Have/Has)',
+    unitReference: 'Chapter 1: Introducing My Self and Other (Unit 3: Language Focus - Describing People)',
     hasAudio: true,
-    audioTitle: 'Audio 2.9: Listening - Imperative Sentence Recognition',
-    listeningInstruction: 'Dengarkan contoh kalimat perintah dalam teks prosedur dan pilih kalimat perintah yang tepat.',
-    audioScript: 'Procedure text uses imperative sentences to give clear cooking directions. Listen to this sentence: Stir the mixture gently with a wooden spoon until smooth. Which of the following sentences is an imperative sentence?',
-    question: 'Procedure text uses imperative sentences (kalimat perintah) to give clear cooking directions. Which of the following sentences is an IMPERATIVE sentence?',
+    audioTitle: 'Audio 1.9: Listening - Describing Physical Features',
+    listeningInstruction: 'Dengarkan kalimat yang mendeskripsikan ciri fisik Pak Edo, lalu pilih kata kerja kepemilikan yang tepat.',
+    audioScript: 'Listen carefully: Pak Edo is a friendly and cheerful man. He blank short curly hair, brown eyes, and a well-built body. Which word correctly fills the blank: am, are, has, or have?',
+    contextTitle: 'Describing Physical Appearance',
+    contextText: `"Pak Edo is a friendly and cheerful man. He __________ short curly hair, brown eyes, and a well-built body."`,
+    question: 'Which word correctly completes the sentence to describe Pak Edo\'s hair and eyes?',
     options: [
-      { key: 'A', text: 'Monita is cooking sweet potato fritters in the kitchen.' },
-      { key: 'B', text: 'Stir the mixture gently with a wooden spoon until smooth.' },
-      { key: 'C', text: 'Andre and Galang ate three plates of special fried rice.' },
-      { key: 'D', text: 'My mother will buy fresh bananas at the supermarket tomorrow.' },
+      { key: 'A', text: 'is' },
+      { key: 'B', text: 'has' },
+      { key: 'C', text: 'have' },
+      { key: 'D', text: 'are' },
     ],
     correctAnswer: 'B',
-    explanation: 'Kalimat perintah (imperative sentence) diawali langsung dengan kata kerja bentuk pertama (Verb 1) tanpa subjek: "Stir the mixture gently..." (Aduklah adonan secara perlahan...). Pilihan A, C, dan D adalah kalimat berita/pernyataan (declarative).'
+    explanation: 'Untuk mendeskripsikan kepemilikan ciri bagian tubuh berupa kata benda ("short curly hair, brown eyes") dengan subjek tunggal "He" (Pak Edo), kita menggunakan "has" (He has short curly hair).'
   },
   {
     id: 10,
-    topic: 'Comprehension & Vocabulary in Context',
-    unitReference: 'Chapter 2: Culinary and Me (Unit 3: Worksheet 2.22 - Warm Sweet Tea)',
+    topic: 'Reading Comprehension: Descriptive Text (Describing People)',
+    unitReference: 'Chapter 1: Introducing My Self and Other (Unit 3: Made the Basketball Player)',
     hasAudio: true,
-    audioTitle: 'Audio 2.10: Listening - How to Make Warm Sweet Tea',
-    listeningInstruction: 'Dengarkan audio resep membuat teh manis hangat, lalu tentukan alasan mencelupkan kantong teh berulang kali.',
-    audioScript: 'How to Make Warm Sweet Tea. Ingredients: one tea bag, two teaspoons of sugar, two hundred milliliters of warm water. Steps: One, place the tea bag into a cup. Two, pour warm water into the cup. Three, dip the tea bag several times until the water turns reddish-brown. Four, add two teaspoons of sugar and stir well. Five, warm sweet tea is ready to serve! Question: Based on the text, why should we dip the tea bag into the warm water several times?',
-    contextTitle: 'How to Make Warm Sweet Tea',
-    contextText: `Ingredients:\n• 1 tea bag\n• 2 teaspoons of sugar\n• 200 ml of warm water\nSteps:\n1. Place the tea bag into a cup.\n2. Pour warm water into the cup.\n3. Dip the tea bag several times until the water turns reddish-brown.\n4. Add two teaspoons of sugar and stir well.\n5. Warm sweet tea is ready to serve!`,
-    question: 'Based on the text, why should we dip the tea bag into the warm water several times?',
+    audioTitle: 'Audio 1.10: Listening - My Best Friend, Made',
+    listeningInstruction: 'Dengarkan teks deskriptif tentang Made berikut dengan saksama, lalu jawab pertanyaan mengenai sifat dan olahraga favorit Made.',
+    audioScript: 'Made is a tall boy with a friendly smile. He has short straight black hair. He uses crutches to walk, and he is very independent, polite, and helpful to his friends. Made loves sports very much. His favorite sport is wheelchair basketball, and he practices every Wednesday and Saturday afternoon. Question: Which statement is TRUE about Made based on the descriptive text?',
+    contextTitle: 'My Best Friend, Made',
+    contextText: `Made is a tall boy with a friendly smile. He has short, straight black hair. He uses crutches to walk, and he is very independent, polite, and helpful to his friends. Made loves sports very much. His favorite sport is wheelchair basketball, and he practices every Wednesday and Saturday afternoon.`,
+    question: 'Which statement is TRUE about Made based on the descriptive text above?',
     options: [
-      { key: 'A', text: 'To cool down the warm water quickly' },
-      { key: 'B', text: 'To extract the tea flavor and color until the water turns reddish-brown' },
-      { key: 'C', text: 'To melt the plastic spoon in the cup' },
-      { key: 'D', text: 'To clean and wash the tea bag' },
+      { key: 'A', text: 'Made has long wavy hair and dislikes playing sports' },
+      { key: 'B', text: 'Made is an independent and polite boy whose favorite sport is wheelchair basketball' },
+      { key: 'C', text: 'Made is shy to greet people and only practices football on Sundays' },
+      { key: 'D', text: 'Made wears prescription glasses and loves reading novels in the library' },
     ],
     correctAnswer: 'B',
-    explanation: 'Berdasarkan langkah ke-3 ("Dip the tea bag several times until the water turns reddish-brown"), tujuan mencelupkan kantong teh berulang kali adalah untuk mengeluarkan sari rasa dan warna teh hingga air berubah menjadi cokelat kemerahan.'
+    explanation: 'Berdasarkan teks deskriptif di atas, pernyataan yang benar adalah Made merupakan anak yang mandiri serta sopan ("independent, polite") dan olahraga favoritnya adalah bola basket kursi roda ("wheelchair basketball").'
   }
 ];
 

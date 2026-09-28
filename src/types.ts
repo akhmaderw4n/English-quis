@@ -113,6 +113,9 @@ export interface StudentRestrictionConfig {
   allowReviewAfterQuiz: boolean; // izinkan siswa melihat kunci/pembahasan setelah selesai
   studyModuleAccessMode: 'once_per_user' | 'unlimited' | 'locked'; // 1 user 1x lihat, bebas, atau terkunci penuh
   extraAttemptGrants: Record<string, number>; // studentKey -> jumlah ekstra kuota pengerjaan
+  shuffleQuestions?: boolean; // true = acak urutan soal untuk setiap siswa
+  lockByClassAndNumber?: boolean; // true = kunci kuota berdasarkan Kelas + Nomor Absen (anti manipulasi nama)
+  viewedStudyModuleMap?: Record<string, string>; // sinkronisasi cloud 1x lihat modul ajar
   updatedAt?: string;
 }
 

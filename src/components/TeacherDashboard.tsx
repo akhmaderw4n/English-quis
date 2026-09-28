@@ -46,7 +46,7 @@ import {
   Sliders
 } from 'lucide-react';
 import { QuizSubmission, QuizViolationRecord, Question, ProcedureTextConfig, StudentRestrictionConfig } from '../types';
-import { QUIZ_QUESTIONS, QUIZ_METADATA, INITIAL_STUDENT_SUBMISSIONS, INITIAL_PROCEDURE_TEXT_CONFIG, INITIAL_STUDENT_RESTRICTION_CONFIG } from '../data/quizData';
+import { QUIZ_QUESTIONS, QUIZ_METADATA, INITIAL_STUDENT_SUBMISSIONS, INITIAL_PROCEDURE_TEXT_CONFIG, INITIAL_STUDENT_RESTRICTION_CONFIG, detectCrossClassDuplicateSubmissions } from '../data/quizData';
 import { ReviewModal } from './ReviewModal';
 import { TeacherInputStudent } from './TeacherInputStudent';
 import { WordImportModal } from './WordImportModal';
@@ -198,6 +198,12 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     submissions.forEach(s => set.add(s.studentClass));
     return ['ALL', ...Array.from(set).sort()];
   }, [submissions]);
+
+  // Detect any user name used in 2 classes where one is not registered in the Student/Teacher Database
+  const crossClassConflicts = useMemo(
+    () => detectCrossClassDuplicateSubmissions(submissions, studentRestrictions),
+    [submissions, studentRestrictions]
+  );
 
   // Filtered and sorted submissions
   const filteredSubmissions = useMemo(() => {
@@ -635,6 +641,68 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
           >
             ✕
           </button>
+        </motion.div>
+      )}
+
+      {/* Cross-Class Duplicate Name Alert Banner in Teacher Dashboard */}
+      {crossClassConflicts.length > 0 && activeTab !== 'restrictions' && (
+        <motion.div
+          initial={{ opacity: 0, scale: 0.98 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="mb-5 p-4 rounded-2xl bg-rose-50 border-2 border-rose-400 text-rose-950 flex flex-col md:flex-row items-start md:items-center justify-between gap-3 shadow-sm"
+        >
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-xl bg-rose-600 text-white flex items-center justify-center shrink-0">
+              <AlertTriangle className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="px-2 py-0.5 rounded-md bg-rose-600 text-white font-black text-[10px] uppercase tracking-wider">
+                  Peringatan Database Siswa/Guru
+                </span>
+                <span className="font-bold text-xs text-rose-900">
+                  Ditemukan {crossClassConflicts.length} Nama User Digunakan di 2 Kelas!
+                </span>
+              </div>
+              <p className="text-xs text-rose-800 mt-1 leading-relaxed">
+                Nama <strong>{crossClassConflicts.map((c) => `${c.displayName} (${c.classesUsed.join(' & ')})`).join(', ')}</strong> terdeteksi digunakan di 2 kelas berbeda. Tolak salah satu kelas yang tidak terdata di Database Siswa/Guru.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0 self-end md:self-auto flex-wrap">
+            <button
+              type="button"
+              onClick={async () => {
+                playClickSound();
+                let count = 0;
+                for (const conf of crossClassConflicts) {
+                  for (const inv of conf.invalidSubmissions) {
+                    await onDeleteSubmission(inv.id);
+                    count += 1;
+                  }
+                }
+                setDeleteToast(
+                  `Berhasil menolak & menghapus ${count} data siswa pada kelas yang tidak terdata di Database Siswa/Guru.`
+                );
+                setTimeout(() => setDeleteToast(null), 4000);
+              }}
+              className="px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer shadow-xs"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Tolak Kelas Tidak Terdata</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                playClickSound();
+                setActiveTab('restrictions');
+              }}
+              className="px-3 py-1.5 rounded-xl bg-white hover:bg-rose-100 text-rose-900 border border-rose-300 font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
+            >
+              <span>Kelola Database Siswa &rarr;</span>
+            </button>
+          </div>
         </motion.div>
       )}
 
@@ -1620,6 +1688,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
           onUpdateConfig={(newConfig) => {
             onUpdateStudentRestrictions?.(newConfig);
           }}
+          onDeleteSubmission={onDeleteSubmission}
           onResetStudyModuleViews={onResetStudyModuleViews}
         />
       )}

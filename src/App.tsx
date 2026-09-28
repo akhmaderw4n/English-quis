@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { ViewState, StudentInfo, QuizSubmission, ViolationLockSession, QuizViolationRecord, Question, ProcedureTextConfig, StudentRestrictionConfig } from './types';
-import { QUIZ_QUESTIONS, QUIZ_METADATA, INITIAL_STUDENT_SUBMISSIONS, INITIAL_PROCEDURE_TEXT_CONFIG, INITIAL_STUDENT_RESTRICTION_CONFIG } from './data/quizData';
+import { QUIZ_QUESTIONS, QUIZ_METADATA, INITIAL_STUDENT_SUBMISSIONS, INITIAL_PROCEDURE_TEXT_CONFIG, INITIAL_STUDENT_RESTRICTION_CONFIG, INITIAL_REGISTERED_STUDENTS, getStudentAttemptStatus, normalizeStudentName, normalizeStudentNumber } from './data/quizData';
 import { Navbar } from './components/Navbar';
 import { Footer } from './components/Footer';
 import { StartScreen } from './components/StartScreen';
@@ -560,6 +560,13 @@ export default function App() {
   ) => {
     if (!currentStudent) return;
 
+    // Final guard: reject if student name is used in 2 classes and not registered for this class in Database Siswa/Guru
+    const statusCheck = getStudentAttemptStatus(currentStudent, submissions, studentRestrictions);
+    if (statusCheck.isDatabaseRejected) {
+      setCurrentView('start');
+      return;
+    }
+
     let correctCount = 0;
     questions.forEach(q => {
       if (answers[q.id] === q.correctAnswer) {
@@ -600,6 +607,26 @@ export default function App() {
     setSubmissions(prev => [newSubmission, ...prev.filter(s => s.id !== newSubmission.id)]);
     setLatestSubmission(newSubmission);
     setCurrentView('result');
+
+    // Automatically register this student in Database Siswa/Guru if not yet registered
+    const currentRoster = studentRestrictions.registeredStudents ?? INITIAL_REGISTERED_STUDENTS;
+    const normName = normalizeStudentName(currentStudent.name);
+    if (normName && !currentRoster.some(r => normalizeStudentName(r.name) === normName)) {
+      const updatedRestrictions: StudentRestrictionConfig = {
+        ...studentRestrictions,
+        registeredStudents: [
+          ...currentRoster,
+          {
+            id: `reg-auto-${Date.now()}`,
+            name: currentStudent.name.trim(),
+            studentClass: currentStudent.studentClass.trim().toUpperCase(),
+            studentNumber: normalizeStudentNumber(currentStudent.studentNumber) || '1',
+          },
+        ],
+        updatedAt: new Date().toISOString(),
+      };
+      handleUpdateStudentRestrictions(updatedRestrictions);
+    }
 
     // Persist to Firebase Firestore for cross-device sync
     try {
@@ -686,7 +713,36 @@ export default function App() {
 
   // Add new submission manually by teacher
   const handleAddSubmission = async (newSub: QuizSubmission) => {
+    const statusCheck = getStudentAttemptStatus(
+      { name: newSub.studentName, studentClass: newSub.studentClass, studentNumber: newSub.studentNumber },
+      submissions,
+      studentRestrictions
+    );
+    if (statusCheck.isCrossClassConflict) {
+      return;
+    }
+
     setSubmissions(prev => [newSub, ...prev.filter(s => s.id !== newSub.id)]);
+
+    // Register into Database Siswa/Guru if not already present
+    const currentRoster = studentRestrictions.registeredStudents ?? INITIAL_REGISTERED_STUDENTS;
+    const normName = normalizeStudentName(newSub.studentName);
+    if (normName && !currentRoster.some(r => normalizeStudentName(r.name) === normName)) {
+      handleUpdateStudentRestrictions({
+        ...studentRestrictions,
+        registeredStudents: [
+          ...currentRoster,
+          {
+            id: `reg-t-${Date.now()}`,
+            name: newSub.studentName.trim(),
+            studentClass: newSub.studentClass.trim().toUpperCase(),
+            studentNumber: normalizeStudentNumber(newSub.studentNumber) || '1',
+          },
+        ],
+        updatedAt: new Date().toISOString(),
+      });
+    }
+
     try {
       await saveSubmissionToFirebase(newSub);
     } catch (err) {
@@ -696,9 +752,19 @@ export default function App() {
 
   // Add multiple submissions manually by teacher
   const handleAddBatchSubmissions = async (newSubs: QuizSubmission[]) => {
-    setSubmissions(prev => [...newSubs, ...prev]);
+    const validSubs = newSubs.filter(sub => {
+      const check = getStudentAttemptStatus(
+        { name: sub.studentName, studentClass: sub.studentClass, studentNumber: sub.studentNumber },
+        submissions,
+        studentRestrictions
+      );
+      return !check.isCrossClassConflict;
+    });
+    if (validSubs.length === 0) return;
+
+    setSubmissions(prev => [...validSubs, ...prev]);
     try {
-      await saveBatchSubmissionsToFirebase(newSubs);
+      await saveBatchSubmissionsToFirebase(validSubs);
     } catch (err) {
       console.error('Error adding batch submissions to Firebase:', err);
     }

@@ -104,6 +104,13 @@ export interface ProcedureTextConfig {
   lastUpdated?: string;
 }
 
+export interface RegisteredStudent {
+  id: string;
+  name: string;
+  studentClass: string;
+  studentNumber: string;
+}
+
 export interface StudentRestrictionConfig {
   maxAttempts: number; // 1 = 1x pengerjaan, 2 = 2x, 3 = 3x, 0 = tanpa batas
   timeLimitMinutes: number; // 0 = tanpa batas waktu, atau 15, 20, 30, 45, 60 menit
@@ -116,6 +123,8 @@ export interface StudentRestrictionConfig {
   shuffleQuestions?: boolean; // true = acak urutan soal untuk setiap siswa
   lockByClassAndNumber?: boolean; // true = kunci kuota berdasarkan Kelas + Nomor Absen (anti manipulasi nama)
   viewedStudyModuleMap?: Record<string, string>; // sinkronisasi cloud 1x lihat modul ajar
+  registeredStudents?: RegisteredStudent[]; // Database resmi siswa/guru per kelas
+  enforceRegisteredDatabase?: boolean; // true = wajib terdata di database siswa/guru untuk mengerjakan
   updatedAt?: string;
 }
 

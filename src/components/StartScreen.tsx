@@ -70,6 +70,14 @@ export const StartScreen: React.FC<StartScreenProps> = ({
     restrictions
   );
 
+  // Registered students in the currently selected class for quick autocomplete
+  const classRegisteredStudents = React.useMemo(() => {
+    const list = restrictions.registeredStudents || [];
+    return list.filter(
+      (r) => (r.studentClass || '').trim().toUpperCase() === studentClass.trim().toUpperCase()
+    );
+  }, [restrictions.registeredStudents, studentClass]);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) {
@@ -90,6 +98,13 @@ export const StartScreen: React.FC<StartScreenProps> = ({
     }
     if (!attemptStatus.isClassAllowed) {
       setErrorMsg(`Akses pengerjaan untuk Kelas ${studentClass} saat ini belum dibuka oleh Guru.`);
+      return;
+    }
+    if (attemptStatus.isDatabaseRejected) {
+      setErrorMsg(
+        attemptStatus.conflictMessage ||
+          `DITOLAK: Nama "${name.trim()}" tidak sesuai dengan Database Siswa/Guru untuk Kelas ${studentClass}.`
+      );
       return;
     }
     if (attemptStatus.isQuotaExhausted) {
@@ -265,19 +280,49 @@ export const StartScreen: React.FC<StartScreenProps> = ({
         <form onSubmit={handleSubmit} className="space-y-4">
           {/* Student Name */}
           <div>
-            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-              Nama Lengkap Siswa <span className="text-rose-500">*</span>
-            </label>
+            <div className="flex items-center justify-between gap-2 mb-1.5">
+              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                Nama Lengkap Siswa <span className="text-rose-500">*</span>
+              </label>
+              {attemptStatus.isVerifiedInDatabase && (
+                <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                  <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                  <span>Terdata di Database Kelas {attemptStatus.authoritativeClass}</span>
+                </span>
+              )}
+            </div>
             <div className="relative">
               <input
                 type="text"
                 required
+                list="registered-class-students"
                 value={name}
-                onChange={(e) => handleNameChange(e.target.value)}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  handleNameChange(val);
+                  // Auto-fill studentNumber if matches a registered student in the selected class
+                  const matched = classRegisteredStudents.find(
+                    (r) => r.name.trim().toLowerCase() === val.trim().toLowerCase()
+                  );
+                  if (matched && matched.studentNumber && !studentNumber) {
+                    handleNumberChange(matched.studentNumber);
+                  }
+                }}
                 placeholder="Contoh: Galang Pratama"
-                className="w-full pl-10 pr-4 py-3 sm:py-2.5 rounded-xl border border-slate-300 focus:border-amber-500 focus:ring-2 focus:ring-amber-200 outline-hidden text-base sm:text-sm text-slate-800 transition-all font-medium"
+                className={`w-full pl-10 pr-4 py-3 sm:py-2.5 rounded-xl border outline-hidden text-base sm:text-sm text-slate-800 transition-all font-medium ${
+                  attemptStatus.isDatabaseRejected
+                    ? 'border-rose-400 bg-rose-50/40 focus:border-rose-500 focus:ring-2 focus:ring-rose-200'
+                    : 'border-slate-300 focus:border-amber-500 focus:ring-2 focus:ring-amber-200'
+                }`}
               />
               <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5 sm:top-3" />
+              <datalist id="registered-class-students">
+                {classRegisteredStudents.map((st) => (
+                  <option key={st.id} value={st.name}>
+                    Kelas {st.studentClass} • No. Absen {st.studentNumber}
+                  </option>
+                ))}
+              </datalist>
             </div>
           </div>
 
@@ -294,7 +339,11 @@ export const StartScreen: React.FC<StartScreenProps> = ({
                   playClickSound();
                   handleClassChange(e.target.value);
                 }}
-                className="w-full pl-10 pr-10 py-3 sm:py-2.5 rounded-xl border border-slate-300 focus:border-amber-500 focus:ring-2 focus:ring-amber-200 outline-hidden text-base sm:text-sm text-slate-800 transition-all font-medium bg-white appearance-none cursor-pointer"
+                className={`w-full pl-10 pr-10 py-3 sm:py-2.5 rounded-xl border outline-hidden text-base sm:text-sm text-slate-800 transition-all font-medium bg-white appearance-none cursor-pointer ${
+                  attemptStatus.isCrossClassConflict
+                    ? 'border-rose-400 bg-rose-50/40 focus:border-rose-500 focus:ring-2 focus:ring-rose-200'
+                    : 'border-slate-300 focus:border-amber-500 focus:ring-2 focus:ring-amber-200'
+                }`}
               >
                 <option value="" disabled>-- Pilih Kelas Anda --</option>
                 <option value="7A">Kelas 7A</option>
@@ -333,8 +382,44 @@ export const StartScreen: React.FC<StartScreenProps> = ({
             </div>
           </div>
 
+          {/* Real-time Cross-Class / Database Validation Rejection Alert */}
+          {name.trim() && studentClass.trim() && attemptStatus.isDatabaseRejected && (
+            <div className="p-3.5 rounded-xl bg-rose-50 border-2 border-rose-300 text-rose-950 text-xs flex items-start gap-2.5 shadow-2xs">
+              <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+              <div className="space-y-1.5 flex-1">
+                <span className="font-extrabold block text-rose-800">
+                  {attemptStatus.isCrossClassConflict
+                    ? 'Akses Ditolak: Nama User Digunakan di 2 Kelas!'
+                    : 'Akses Ditolak: Data Tidak Sesuai Database Siswa/Guru'}
+                </span>
+                <p className="text-rose-900 leading-relaxed">{attemptStatus.conflictMessage}</p>
+                {attemptStatus.authoritativeClass && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      playClickSound();
+                      handleClassChange(attemptStatus.authoritativeClass);
+                      if (attemptStatus.authoritativeNumber) {
+                        handleNumberChange(attemptStatus.authoritativeNumber);
+                      }
+                    }}
+                    className="mt-1 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-700 hover:bg-rose-800 text-white font-bold text-[11px] transition-colors cursor-pointer"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>
+                      Gunakan Data Resmi Database: Kelas {attemptStatus.authoritativeClass}
+                      {attemptStatus.authoritativeNumber
+                        ? ` (No. Absen ${attemptStatus.authoritativeNumber})`
+                        : ''}
+                    </span>
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Live Attempt Quota Check for Current Student Identity */}
-          {attemptStatus.isIdentityComplete && (
+          {attemptStatus.isIdentityComplete && !attemptStatus.isDatabaseRejected && (
             <div
               className={`p-3 rounded-xl border text-xs flex items-start gap-2.5 ${
                 !attemptStatus.isClassAllowed
@@ -394,12 +479,17 @@ export const StartScreen: React.FC<StartScreenProps> = ({
           )}
 
           {/* Submit Button */}
-          {attemptStatus.isIdentityComplete && !attemptStatus.canStartQuiz ? (
-            <div className="w-full mt-3 py-3.5 sm:py-4 px-6 rounded-xl bg-slate-200 text-slate-600 font-bold text-sm sm:text-base flex items-center justify-center gap-2 select-none cursor-not-allowed border border-slate-300">
+          {(name.trim() && studentClass.trim() && attemptStatus.isDatabaseRejected) ||
+          (attemptStatus.isIdentityComplete && !attemptStatus.canStartQuiz) ? (
+            <div className="w-full mt-3 py-3.5 sm:py-4 px-6 rounded-xl bg-slate-200 text-slate-600 font-bold text-sm sm:text-base flex items-center justify-center gap-2 select-none cursor-not-allowed border border-slate-300 text-center">
               <Lock className="w-4 h-4 text-rose-600 shrink-0" />
               <span>
                 {!restrictions.isQuizOpen
                   ? 'Sesi Kuis Sedang Ditutup Guru'
+                  : attemptStatus.isCrossClassConflict
+                  ? `Ditolak: Nama Terdaftar di Kelas ${attemptStatus.authoritativeClass} (Bukan Kelas ${studentClass})`
+                  : attemptStatus.isDatabaseRejected
+                  ? 'Ditolak: Data Tidak Sesuai Database Siswa/Guru'
                   : !attemptStatus.isClassAllowed
                   ? `Akses Kelas ${studentClass} Sedang Dibatasi`
                   : `Sudah Mencapai Batas Pengerjaan (${attemptStatus.attemptsUsed}/${attemptStatus.effectiveMaxAttempts}x)`}

@@ -15,16 +15,29 @@ import {
   X,
   Eye,
   EyeOff,
-  Check
+  Check,
+  AlertTriangle,
+  UserPlus,
+  Trash2,
+  Database
 } from 'lucide-react';
-import { StudentRestrictionConfig, QuizSubmission } from '../types';
-import { ALL_CLASS_LIST, QUIZ_METADATA, buildNormalizedStudentKey } from '../data/quizData';
+import { StudentRestrictionConfig, QuizSubmission, RegisteredStudent } from '../types';
+import {
+  ALL_CLASS_LIST,
+  QUIZ_METADATA,
+  INITIAL_REGISTERED_STUDENTS,
+  buildNormalizedStudentKey,
+  normalizeStudentName,
+  normalizeStudentNumber,
+  detectCrossClassDuplicateSubmissions
+} from '../data/quizData';
 import { playClickSound } from '../utils/audio';
 
 interface StudentRestrictionPanelProps {
   config: StudentRestrictionConfig;
   submissions: QuizSubmission[];
   onUpdateConfig: (newConfig: StudentRestrictionConfig) => void;
+  onDeleteSubmission?: (id: string) => Promise<void> | void;
   onResetStudyModuleViews?: () => void;
   isModal?: boolean;
   onCloseModal?: () => void;
@@ -34,12 +47,34 @@ export const StudentRestrictionPanel: React.FC<StudentRestrictionPanelProps> = (
   config,
   submissions,
   onUpdateConfig,
+  onDeleteSubmission,
   onResetStudyModuleViews,
   isModal = false,
   onCloseModal,
 }) => {
   const [savedToast, setSavedToast] = useState<string | null>(null);
   const [classFilter, setClassFilter] = useState<string>('ALL');
+
+  // State for Database Siswa / Guru management
+  const [dbClassFilter, setDbClassFilter] = useState<string>('ALL');
+  const [newRegName, setNewRegName] = useState('');
+  const [newRegClass, setNewRegClass] = useState('7A');
+  const [newRegNumber, setNewRegNumber] = useState('');
+  const [dbErrorMsg, setDbErrorMsg] = useState<string | null>(null);
+  const [bulkPasteMode, setBulkPasteMode] = useState(false);
+  const [bulkPasteClass, setBulkPasteClass] = useState('7A');
+  const [bulkPasteText, setBulkPasteText] = useState('');
+
+  const registeredStudents = React.useMemo(
+    () => config.registeredStudents ?? INITIAL_REGISTERED_STUDENTS,
+    [config.registeredStudents]
+  );
+
+  // Detect any user name used across 2 classes where one is not registered in the Student/Teacher Database
+  const crossClassConflicts = React.useMemo(
+    () => detectCrossClassDuplicateSubmissions(submissions, config),
+    [submissions, config]
+  );
 
   const showToast = (msg: string) => {
     setSavedToast(msg);
@@ -249,6 +284,240 @@ export const StudentRestrictionPanel: React.FC<StudentRestrictionPanelProps> = (
     onUpdateConfig(updated);
     showToast(`Kuota tambahan untuk ${studentName} dikembalikan ke batas standar`);
   };
+
+  // --- Database Siswa / Guru & Cross-Class Conflict Handlers ---
+  const handleToggleEnforceDatabase = () => {
+    playClickSound();
+    const nextVal = !config.enforceRegisteredDatabase;
+    onUpdateConfig({
+      ...config,
+      registeredStudents,
+      enforceRegisteredDatabase: nextVal,
+      updatedAt: new Date().toISOString(),
+    });
+    showToast(
+      nextVal
+        ? 'Mode Ketat Database Siswa/Guru AKTIF: Hanya nama yang terdata di database yang diizinkan mengerjakan'
+        : 'Mode Ketat dinonaktifkan (Tolak nama ganda di 2 kelas tetap aktif otomatis)'
+    );
+  };
+
+  const handleAddRegisteredStudent = (e: React.FormEvent) => {
+    e.preventDefault();
+    playClickSound();
+    const cleanName = normalizeStudentName(newRegName);
+    const cleanClass = newRegClass.trim().toUpperCase();
+    const cleanNum = normalizeStudentNumber(newRegNumber) || '1';
+
+    if (!cleanName) {
+      setDbErrorMsg('Harap isi Nama Lengkap Siswa terlebih dahulu.');
+      return;
+    }
+
+    // Check if name already exists in another class in registeredStudents
+    const existingByName = registeredStudents.find(
+      (r) => normalizeStudentName(r.name) === cleanName
+    );
+    if (existingByName && existingByName.studentClass.toUpperCase() !== cleanClass) {
+      setDbErrorMsg(
+        `DITOLAK: Nama "${newRegName.trim()}" sudah terdata di Kelas ${existingByName.studentClass} (Absen ${existingByName.studentNumber}). Satu nama siswa tidak boleh terdaftar di 2 kelas berbeda! Hapus data lama jika ingin memindahkan kelas.`
+      );
+      return;
+    }
+
+    setDbErrorMsg(null);
+    const updatedList = existingByName
+      ? registeredStudents.map((r) =>
+          r.id === existingByName.id
+            ? { ...r, name: newRegName.trim(), studentClass: cleanClass, studentNumber: cleanNum }
+            : r
+        )
+      : [
+          ...registeredStudents,
+          {
+            id: `reg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            name: newRegName.trim(),
+            studentClass: cleanClass,
+            studentNumber: cleanNum,
+          },
+        ];
+
+    onUpdateConfig({
+      ...config,
+      registeredStudents: updatedList,
+      updatedAt: new Date().toISOString(),
+    });
+    setNewRegName('');
+    setNewRegNumber(String((parseInt(cleanNum, 10) || 1) + 1));
+    showToast(`Siswa "${newRegName.trim()}" (Kelas ${cleanClass} • Absen ${cleanNum}) disimpan ke Database Siswa/Guru`);
+  };
+
+  const handleDeleteRegisteredStudent = (id: string, name: string, cls: string) => {
+    playClickSound();
+    const nextList = registeredStudents.filter((r) => r.id !== id);
+    onUpdateConfig({
+      ...config,
+      registeredStudents: nextList,
+      updatedAt: new Date().toISOString(),
+    });
+    showToast(`Data "${name}" (Kelas ${cls}) dihapus dari Database Siswa/Guru`);
+  };
+
+  const handleSyncDatabaseFromSubmissions = () => {
+    playClickSound();
+    const mapByName = new Map<string, RegisteredStudent>();
+    registeredStudents.forEach((r) => {
+      mapByName.set(normalizeStudentName(r.name), r);
+    });
+
+    // Sort oldest submissions first so earliest class is authoritative
+    const sortedSubs = [...submissions].sort(
+      (a, b) => new Date(a.submittedAt).getTime() - new Date(b.submittedAt).getTime()
+    );
+
+    let addedCount = 0;
+    sortedSubs.forEach((sub) => {
+      const norm = normalizeStudentName(sub.studentName);
+      if (!norm) return;
+      if (!mapByName.has(norm)) {
+        mapByName.set(norm, {
+          id: `reg-sync-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          name: sub.studentName.trim(),
+          studentClass: (sub.studentClass || '7A').trim().toUpperCase(),
+          studentNumber: normalizeStudentNumber(sub.studentNumber) || '1',
+        });
+        addedCount += 1;
+      }
+    });
+
+    const nextList = Array.from(mapByName.values());
+    onUpdateConfig({
+      ...config,
+      registeredStudents: nextList,
+      updatedAt: new Date().toISOString(),
+    });
+    showToast(
+      addedCount > 0
+        ? `Berhasil menyinkronkan ${addedCount} nama siswa baru ke Database Siswa/Guru`
+        : 'Seluruh nama siswa pada rekap nilai sudah terdata di Database Siswa/Guru'
+    );
+  };
+
+  const handleSaveBulkPasteRoster = () => {
+    playClickSound();
+    const lines = bulkPasteText
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean);
+    if (lines.length === 0) {
+      setDbErrorMsg('Tempel minimal 1 baris nama siswa terlebih dahulu.');
+      return;
+    }
+
+    const mapByName = new Map<string, RegisteredStudent>();
+    registeredStudents.forEach((r) => {
+      mapByName.set(normalizeStudentName(r.name), r);
+    });
+
+    let added = 0;
+    let skippedConflict = 0;
+
+    lines.forEach((line, idx) => {
+      // Support formats like "12. Galang Pratama", "12 - Galang Pratama", "12\tGalang Pratama", or "Galang Pratama"
+      const match = line.match(/^(\d{1,3})[\.\-\s\t]+(.+)$/);
+      const numStr = match ? normalizeStudentNumber(match[1]) : String(idx + 1);
+      const rawName = (match ? match[2] : line).trim();
+      const norm = normalizeStudentName(rawName);
+      if (!norm) return;
+
+      const existing = mapByName.get(norm);
+      if (existing && existing.studentClass.toUpperCase() !== bulkPasteClass.toUpperCase()) {
+        // Skip because already registered in another class!
+        skippedConflict += 1;
+        return;
+      }
+
+      mapByName.set(norm, {
+        id: existing?.id || `reg-bulk-${Date.now()}-${idx}`,
+        name: rawName,
+        studentClass: bulkPasteClass.toUpperCase(),
+        studentNumber: numStr,
+      });
+      added += 1;
+    });
+
+    onUpdateConfig({
+      ...config,
+      registeredStudents: Array.from(mapByName.values()),
+      updatedAt: new Date().toISOString(),
+    });
+    setBulkPasteText('');
+    setBulkPasteMode(false);
+    setDbErrorMsg(null);
+    showToast(
+      `Berhasil menyimpan ${added} siswa Kelas ${bulkPasteClass} ke Database${
+        skippedConflict > 0 ? ` (${skippedConflict} nama ditolak karena sudah terdaftar di kelas lain)` : ''
+      }`
+    );
+  };
+
+  const handleRejectInvalidClassSubmissions = async (invalidSubs: QuizSubmission[], displayName: string, authClass: string) => {
+    playClickSound();
+    if (!onDeleteSubmission) return;
+    for (const sub of invalidSubs) {
+      await onDeleteSubmission(sub.id);
+    }
+    showToast(
+      `Berhasil menolak & menghapus ${invalidSubs.length} data "${displayName}" di kelas yang tidak terdata (Hanya Kelas ${authClass} yang dipertahankan)`
+    );
+  };
+
+  const handleSetAuthoritativeClassInDb = (
+    displayName: string,
+    chosenClass: string,
+    chosenNumber: string
+  ) => {
+    playClickSound();
+    const norm = normalizeStudentName(displayName);
+    const exists = registeredStudents.some((r) => normalizeStudentName(r.name) === norm);
+    const nextList = exists
+      ? registeredStudents.map((r) =>
+          normalizeStudentName(r.name) === norm
+            ? { ...r, studentClass: chosenClass.toUpperCase(), studentNumber: normalizeStudentNumber(chosenNumber) || r.studentNumber }
+            : r
+        )
+      : [
+          ...registeredStudents,
+          {
+            id: `reg-auth-${Date.now()}`,
+            name: displayName.trim(),
+            studentClass: chosenClass.toUpperCase(),
+            studentNumber: normalizeStudentNumber(chosenNumber) || '1',
+          },
+        ];
+
+    onUpdateConfig({
+      ...config,
+      registeredStudents: nextList,
+      updatedAt: new Date().toISOString(),
+    });
+    showToast(`Database diperbarui: "${displayName}" ditetapkan resmi di Kelas ${chosenClass}`);
+  };
+
+  const filteredRegisteredStudents = React.useMemo(() => {
+    const list =
+      dbClassFilter === 'ALL'
+        ? [...registeredStudents]
+        : registeredStudents.filter((r) => r.studentClass.toUpperCase() === dbClassFilter);
+    return list.sort((a, b) => {
+      const cCmp = a.studentClass.localeCompare(b.studentClass, 'id');
+      if (cCmp !== 0) return cCmp;
+      const nA = parseInt(a.studentNumber, 10) || 999;
+      const nB = parseInt(b.studentNumber, 10) || 999;
+      if (nA !== nB) return nA - nB;
+      return a.name.localeCompare(b.name, 'id');
+    });
+  }, [registeredStudents, dbClassFilter]);
 
   const content = (
     <div className="space-y-6">
@@ -611,7 +880,379 @@ export const StudentRestrictionPanel: React.FC<StudentRestrictionPanelProps> = (
         </div>
       </div>
 
-      {/* Section 5: Tabel Pantauan Kuota Pengerjaan Siswa & Beri Kesempatan Ulang */}
+      {/* Section 5: Deteksi Otomatis Nama User di 2 Kelas & Database Siswa/Guru */}
+      {crossClassConflicts.length > 0 && (
+        <div className="bg-rose-50 p-5 rounded-2xl border-2 border-rose-300 shadow-2xs space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-rose-200">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-rose-600 text-white flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="font-extrabold text-rose-950 text-sm sm:text-base">
+                  Terdeteksi {crossClassConflicts.length} Nama User Digunakan di 2 Kelas Berbeda!
+                </h4>
+                <p className="text-xs text-rose-800 mt-0.5">
+                  Sistem mendeteksi nama siswa yang digunakan pada lebih dari 1 kelas atau tidak sesuai dengan kelas di Database Siswa/Guru. Tolak &amp; hapus kelas yang tidak terdata di bawah ini:
+                </p>
+              </div>
+            </div>
+
+            {onDeleteSubmission && (
+              <button
+                type="button"
+                onClick={async () => {
+                  playClickSound();
+                  let totalRemoved = 0;
+                  for (const item of crossClassConflicts) {
+                    for (const inv of item.invalidSubmissions) {
+                      await onDeleteSubmission(inv.id);
+                      totalRemoved += 1;
+                    }
+                  }
+                  showToast(`Berhasil menolak & menghapus ${totalRemoved} data pengerjaan di kelas yang tidak terdata!`);
+                }}
+                className="px-3.5 py-2 rounded-xl bg-rose-700 hover:bg-rose-800 text-white font-bold text-xs flex items-center gap-1.5 shrink-0 cursor-pointer shadow-xs"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span>Tolak Semua Kelas Tidak Terdata</span>
+              </button>
+            )}
+          </div>
+
+          <div className="space-y-2.5">
+            {crossClassConflicts.map((conf) => (
+              <div
+                key={conf.normalizedName}
+                className="bg-white p-3.5 rounded-xl border border-rose-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs"
+              >
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-extrabold text-slate-900 text-sm">{conf.displayName}</span>
+                    <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-bold text-[11px] border border-emerald-300">
+                      Terdata Resmi: Kelas {conf.authoritativeClass} (Absen {conf.authoritativeNumber || '-'})
+                    </span>
+                    <span className="px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 font-bold text-[11px] border border-rose-300">
+                      Ditolak (Tidak Terdata): Kelas{' '}
+                      {Array.from(new Set(conf.invalidSubmissions.map((s) => s.studentClass))).join(', ')}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-500">
+                    Sumber validasi:{' '}
+                    <strong>
+                      {conf.source === 'DATABASE_SISWA_GURU'
+                        ? 'Database Siswa/Guru'
+                        : 'Data Rekap Pertama di Database Guru'}
+                    </strong>{' '}
+                    &bull; Ditemukan {conf.invalidSubmissions.length} pengerjaan pada kelas yang tidak terdata.
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                  {conf.classesUsed.map((cls) =>
+                    cls !== conf.authoritativeClass ? (
+                      <button
+                        key={cls}
+                        type="button"
+                        onClick={() => {
+                          const sampleSub = conf.invalidSubmissions.find(
+                            (s) => s.studentClass.toUpperCase() === cls
+                          );
+                          handleSetAuthoritativeClassInDb(
+                            conf.displayName,
+                            cls,
+                            sampleSub?.studentNumber || '1'
+                          );
+                        }}
+                        className="px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-[11px] cursor-pointer"
+                        title={`Ubah database agar ${conf.displayName} terdaftar resmi di Kelas ${cls}`}
+                      >
+                        Jadikan Kelas {cls} Resmi
+                      </button>
+                    ) : null
+                  )}
+
+                  {onDeleteSubmission && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        handleRejectInvalidClassSubmissions(
+                          conf.invalidSubmissions,
+                          conf.displayName,
+                          conf.authoritativeClass
+                        )
+                      }
+                      className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-bold text-[11px] inline-flex items-center gap-1 cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>
+                        Tolak Kelas{' '}
+                        {Array.from(new Set(conf.invalidSubmissions.map((s) => s.studentClass))).join(', ')}
+                      </span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Section 6: Database Siswa / Guru (Validasi Anti-Nama Ganda Antar Kelas) */}
+      <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+          <div className="flex items-start gap-2.5">
+            <div className="w-9 h-9 rounded-xl bg-indigo-100 text-indigo-700 flex items-center justify-center shrink-0">
+              <Database className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h4 className="font-bold text-slate-900 text-sm sm:text-base">
+                  5. Database Siswa / Guru (Validasi Kelas Resmi &amp; Anti Nama Ganda di 2 Kelas)
+                </h4>
+                <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 text-[10px] font-bold">
+                  Aktif Menolak Nama di 2 Kelas
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Jika satu nama siswa digunakan di 2 kelas berbeda, sistem otomatis <strong>menolak kelas yang tidak terdata</strong> di Database Siswa/Guru ini.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap shrink-0">
+            <button
+              type="button"
+              onClick={handleSyncDatabaseFromSubmissions}
+              className="px-3 py-1.5 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border border-indigo-200 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+              title="Salin otomatis semua nama siswa dari rekap nilai ke Database Siswa/Guru"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>Sinkronkan dari Rekap Nilai</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                playClickSound();
+                setBulkPasteMode((prev) => !prev);
+              }}
+              className="px-3 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+            >
+              <UserPlus className="w-3.5 h-3.5" />
+              <span>{bulkPasteMode ? 'Tutup Input Massal' : 'Tempel Daftar Siswa per Kelas'}</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Toggle Strict Registered Roster Mode */}
+        <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <span className="font-bold text-xs text-slate-800 block">
+              Mode Ketat: Wajib Terdata di Database Siswa/Guru Sebelum Mulai Kuis
+            </span>
+            <span className="text-[11px] text-slate-500">
+              Jika diaktifkan, siswa yang namanya belum terdaftar sama sekali di tabel bawah ini akan ditolak. (Catatan: Penolakan nama yang dipakai di 2 kelas berbeda selalu aktif secara otomatis).
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={handleToggleEnforceDatabase}
+            className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer shrink-0 ${
+              config.enforceRegisteredDatabase
+                ? 'bg-indigo-600 text-white'
+                : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
+            }`}
+          >
+            {config.enforceRegisteredDatabase ? 'Mode Ketat: Aktif' : 'Mode Ketat: Nonaktif'}
+          </button>
+        </div>
+
+        {/* Bulk Paste Roster Drawer */}
+        {bulkPasteMode && (
+          <div className="p-4 rounded-xl bg-amber-50/70 border border-amber-200 space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <span className="text-xs font-bold text-amber-950">
+                Tempel Daftar Nama Siswa (1 baris 1 nama, contoh: &quot;12. Galang Pratama&quot; atau &quot;Galang Pratama&quot;)
+              </span>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-amber-900">Untuk Kelas:</span>
+                <select
+                  value={bulkPasteClass}
+                  onChange={(e) => setBulkPasteClass(e.target.value)}
+                  className="py-1 px-2.5 rounded-lg border border-amber-300 bg-white text-xs font-bold text-slate-800"
+                >
+                  {ALL_CLASS_LIST.map((c) => (
+                    <option key={c} value={c}>
+                      Kelas {c}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <textarea
+              rows={4}
+              value={bulkPasteText}
+              onChange={(e) => setBulkPasteText(e.target.value)}
+              placeholder={`1. Galang Pratama\n2. Monita Rahma\n3. Made Wijaya`}
+              className="w-full p-2.5 rounded-xl border border-amber-300 bg-white text-xs font-medium text-slate-800 outline-hidden focus:border-amber-500"
+            />
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setBulkPasteMode(false)}
+                className="px-3 py-1.5 rounded-lg bg-white border border-slate-300 text-xs font-bold text-slate-600 cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveBulkPasteRoster}
+                className="px-4 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold cursor-pointer"
+              >
+                Simpan Daftar Siswa Kelas {bulkPasteClass}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Single Add Form to Database Siswa/Guru */}
+        <form onSubmit={handleAddRegisteredStudent} className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-end">
+          <div className="sm:col-span-5">
+            <label className="block text-[11px] font-bold text-slate-600 mb-1">
+              Nama Lengkap Siswa (Resmi)
+            </label>
+            <input
+              type="text"
+              value={newRegName}
+              onChange={(e) => {
+                setNewRegName(e.target.value);
+                setDbErrorMsg(null);
+              }}
+              placeholder="Contoh: Galang Pratama"
+              className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-medium text-slate-800 outline-hidden focus:border-indigo-500"
+            />
+          </div>
+          <div className="sm:col-span-3">
+            <label className="block text-[11px] font-bold text-slate-600 mb-1">Kelas Resmi</label>
+            <select
+              value={newRegClass}
+              onChange={(e) => {
+                setNewRegClass(e.target.value);
+                setDbErrorMsg(null);
+              }}
+              className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-bold text-slate-800"
+            >
+              {ALL_CLASS_LIST.map((c) => (
+                <option key={c} value={c}>
+                  Kelas {c}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="sm:col-span-2">
+            <label className="block text-[11px] font-bold text-slate-600 mb-1">No. Absen</label>
+            <input
+              type="number"
+              min="1"
+              max="60"
+              value={newRegNumber}
+              onChange={(e) => {
+                setNewRegNumber(e.target.value);
+                setDbErrorMsg(null);
+              }}
+              placeholder="12"
+              className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-mono font-bold text-slate-800 outline-hidden focus:border-indigo-500"
+            />
+          </div>
+          <div className="sm:col-span-2">
+            <button
+              type="submit"
+              className="w-full py-2 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+            >
+              <UserPlus className="w-3.5 h-3.5" />
+              <span>Tambah</span>
+            </button>
+          </div>
+        </form>
+
+        {dbErrorMsg && (
+          <div className="p-3 rounded-xl bg-rose-50 border border-rose-300 text-rose-900 text-xs font-bold flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+            <span>{dbErrorMsg}</span>
+          </div>
+        )}
+
+        {/* Filter & Table of Registered Students */}
+        <div className="flex items-center justify-between gap-2 pt-2">
+          <span className="text-xs font-bold text-slate-700">
+            Total Siswa Terdata di Database: {registeredStudents.length} Siswa
+          </span>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-slate-500">Filter Kelas:</span>
+            <select
+              value={dbClassFilter}
+              onChange={(e) => setDbClassFilter(e.target.value)}
+              className="py-1 px-2.5 rounded-lg border border-slate-300 bg-white text-xs font-bold text-slate-800"
+            >
+              <option value="ALL">Semua Kelas ({registeredStudents.length})</option>
+              {ALL_CLASS_LIST.map((c) => (
+                <option key={c} value={c}>
+                  Kelas {c}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <div className="max-h-60 overflow-y-auto border border-slate-200 rounded-xl">
+          <table className="w-full text-left border-collapse text-xs">
+            <thead className="bg-slate-50 sticky top-0">
+              <tr className="border-b border-slate-200 text-slate-500 uppercase tracking-wider text-[10px]">
+                <th className="py-2 px-3">No. Absen</th>
+                <th className="py-2 px-3">Nama Resmi Siswa</th>
+                <th className="py-2 px-3">Kelas Terdata</th>
+                <th className="py-2 px-3 text-right">Aksi</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {filteredRegisteredStudents.length === 0 ? (
+                <tr>
+                  <td colSpan={4} className="py-4 text-center text-slate-400">
+                    Belum ada data siswa pada filter kelas ini.
+                  </td>
+                </tr>
+              ) : (
+                filteredRegisteredStudents.map((st) => (
+                  <tr key={st.id} className="hover:bg-slate-50/80">
+                    <td className="py-2 px-3 font-mono font-bold text-slate-700">
+                      {st.studentNumber}
+                    </td>
+                    <td className="py-2 px-3 font-bold text-slate-900">{st.name}</td>
+                    <td className="py-2 px-3">
+                      <span className="px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-800 font-bold text-[11px] border border-indigo-200">
+                        Kelas {st.studentClass}
+                      </span>
+                    </td>
+                    <td className="py-2 px-3 text-right">
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteRegisteredStudent(st.id, st.name, st.studentClass)}
+                        className="px-2 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-[11px] inline-flex items-center gap-1 cursor-pointer"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                        <span>Hapus</span>
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Section 7: Tabel Pantauan Kuota Pengerjaan Siswa & Beri Kesempatan Ulang */}
       <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
           <div>

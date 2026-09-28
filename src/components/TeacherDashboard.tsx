@@ -260,7 +260,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
 
     let csvContent = '\uFEFF'; // UTF-8 BOM
     csvContent += `REKAPITULASI NILAI KUIS BAHASA INGGRIS - KELAS 7 SMP\n`;
-    csvContent += `Topik: Procedure Text (Chapter 2: Culinary and Me)\n`;
+    csvContent += `Topik: Introducing My self and other (Materi Descriptive text)\n`;
     csvContent += `Buku: English for Nusantara (Kurikulum Merdeka)\n`;
     csvContent += `Guru Pengampu: ${QUIZ_METADATA.branding}\n`;
     csvContent += `KKM: ${QUIZ_METADATA.passingScore}\n\n`;
@@ -518,7 +518,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
             Dashboard Guru: Rekap &amp; Penilaian
           </h1>
           <p className="text-xs sm:text-sm text-slate-400 mt-1 max-w-2xl">
-            Kuis: <strong>Interactive English Quiz: Introducing My self and other</strong> &bull; Materi <strong>Procedure Text (Culinary and Me)</strong> &bull; Buku Siswa <em>English for Nusantara</em> Kelas 7 SMP
+            Kuis: <strong>Interactive English Quiz: Introducing My self and other</strong> &bull; Bab <strong>"Introducing My self and other" (Materi Descriptive text)</strong> &bull; Buku Siswa <em>English for Nusantara</em> Kelas 7 SMP
           </p>
         </div>
 

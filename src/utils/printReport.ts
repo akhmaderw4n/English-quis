@@ -278,7 +278,7 @@ export function generateStudentCertificateHtml(
     <div class="kop">
       <h1>Laporan Capaian Penilaian Pembelajaran Siswa</h1>
       <h2>Mata Pelajaran: Bahasa Inggris &bull; Kelas VII SMP</h2>
-      <p>Kurikulum Merdeka &bull; Rujukan: Buku Siswa <em>English for Nusantara</em> &bull; Chapter 2: Culinary and Me</p>
+      <p>Kurikulum Merdeka &bull; Rujukan: Buku Siswa <em>English for Nusantara</em> &bull; Bab: Introducing My self and other (Materi Descriptive text)</p>
     </div>
 
     <div class="title-badge">
@@ -501,7 +501,7 @@ export function generateTeacherRecapHtml(
   <div class="kop">
     <h1>Daftar Rekapitulasi Penilaian Hasil Kuis</h1>
     <h2>Mata Pelajaran: Bahasa Inggris &bull; Kelas VII SMP</h2>
-    <p>Materi: Procedure Text (Culinary and Me) &bull; Rujukan: English for Nusantara &bull; KKM: ${QUIZ_METADATA.passingScore}</p>
+    <p>Bab: Introducing My self and other (Materi Descriptive text) &bull; Rujukan: English for Nusantara &bull; KKM: ${QUIZ_METADATA.passingScore}</p>
     <p style="font-weight: bold; margin-top: 2px;">Filter Kelas: ${selectedClass === 'ALL' ? 'Semua Kelas' : 'Kelas ' + selectedClass} &bull; Tanggal Cetak: ${dateFormatted}</p>
   </div>
 

@@ -24,7 +24,7 @@ export const Footer: React.FC = () => {
             <span>{QUIZ_METADATA.textbook}</span>
           </div>
           <div>
-            <span>Chapter 1: Introducing my self and other &bull; Topik: Procedure Text (Fase D)</span>
+            <span>Chapter 1: Introducing my self and other &bull; Materi: Descriptive text (Fase D)</span>
           </div>
         </div>
       </div>

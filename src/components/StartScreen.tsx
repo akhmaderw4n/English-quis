@@ -76,7 +76,7 @@ export const StartScreen: React.FC<StartScreenProps> = ({
         </h1>
         
         <p className="mt-1.5 sm:mt-2 text-xs sm:text-base text-slate-600 max-w-2xl mx-auto font-medium px-2">
-          Bab <span className="font-semibold text-slate-800">"Culinary and Me"</span> (Materi Procedure Text) &bull; Buku <span className="font-semibold text-slate-800">"English for Nusantara"</span> Kelas 7
+          Bab <span className="font-semibold text-slate-800">"Introducing My self and other"</span> (Materi Descriptive text) &bull; Buku <span className="font-semibold text-slate-800">"English for Nusantara"</span> Kelas 7
         </p>
 
         {/* Badges Overview: 3-column micro cards on mobile, inline on tablet/desktop */}

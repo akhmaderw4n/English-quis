@@ -104,7 +104,7 @@ export const StartScreen: React.FC<StartScreenProps> = ({
               className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 text-xs sm:text-sm font-bold shadow-2xs transition-all active:scale-98 cursor-pointer"
             >
               <BookOpen className="w-4 h-4 text-amber-600" />
-              <span>Pelajari Modul Procedure Text Terlebih Dahulu</span>
+              <span>Pelajari Modul: Introducing My Self and Other</span>
               <Sparkles className="w-3.5 h-3.5 text-amber-500" />
             </button>
           </div>

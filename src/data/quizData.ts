@@ -15,185 +15,197 @@ export const QUIZ_METADATA = {
 };
 
 export const INITIAL_PROCEDURE_TEXT_CONFIG: ProcedureTextConfig = {
-  definition: 'Procedure text is a text that gives instructions on how to do or make something through a sequence of steps.',
-  socialFunction: 'To explain to the reader or listener how to make, operate, or do something through a sequential series of actions or steps.',
+  definition: 'Introducing Myself and Others adalah materi pembelajaran Bahasa Inggris tentang cara memperkenalkan identitas diri sendiri (Introducing Myself) maupun memperkenalkan orang lain/teman (Introducing Others), dilanjutkan dengan Descriptive Text untuk mendeskripsikan ciri fisik (Physical Appearance), sifat (Personality), serta hobi seseorang secara runtut.',
+  socialFunction: 'Untuk memperkenalkan identitas diri sendiri dan orang lain secara sopan dalam membangun komunikasi sosial, serta mendeskripsikan ciri khusus seseorang (Identification & Description) sesuai konteks Buku English for Nusantara Kelas 7 SMP.',
   genericStructure: [
     {
       id: 'struct-1',
-      title: '1. Goal / Aim (Tujuan)',
-      desc: 'States what is to be made or accomplished, usually written in the title (e.g., How to Make Sweet Potato Fritters).'
+      title: '1. Greeting & Opening (Salam Pembuka & Izin Memperkenalkan Diri)',
+      desc: 'Diawali dengan sapaan sopan seperti "Hello, everyone!", "Good morning, friends!", diikuti kalimat pembuka "Let me introduce myself" atau "Allow me to introduce myself."'
     },
     {
       id: 'struct-2',
-      title: '2. Ingredients / Materials (Bahan-Bahan)',
-      desc: 'Lists the food items, ingredients, quantities, or materials required to complete the procedure (e.g., flour, sugar, bananas, 200 ml of water).'
+      title: '2. Stating Personal Identity (Menyebutkan Identitas Diri Sendiri)',
+      desc: 'Menyampaikan poin-poin identitas: Nama Lengkap ("My name is..."), Nama Panggilan ("You can call me..."), Asal Daerah ("I am from..."), Alamat Tempat Tinggal ("I live in/on/at..."), serta Usia & Sekolah ("I am 13 years old. I study at SMP Merdeka.").'
     },
     {
       id: 'struct-3',
-      title: '3. Cooking Utensils / Tools (Peralatan)',
-      desc: 'Lists the kitchen equipment or tools used during preparation (e.g., frying pan, spatula, knife, peeler, sieve, stove).'
+      title: '3. Stating Hobbies, Favorites & Family (Hobi, Hal Favorit & Keluarga)',
+      desc: 'Menjelaskan kegemaran ("My hobby is fishing / I like playing badminton"), makanan/minuman favorit ("My favorite food is fried rice"), serta jumlah saudara kandung ("I have one older sister and one brother").'
     },
     {
       id: 'struct-4',
-      title: '4. Steps / Method (Langkah-Langkah)',
-      desc: 'The chronological step-by-step instructions using imperative verbs (Verb 1) and sequence connectors to guide the reader.'
+      title: '4. Introducing Others (Memperkenalkan Orang Lain / Teman)',
+      desc: 'Menggunakan ungkapan penghubung untuk memperkenalkan teman atau keluarga: "This is my friend, Andre.", "Let me introduce my classmate, Monita. She is from Medan. Her hobby is reading.", serta respons "Nice to meet you!" -> "Nice to meet you too."'
+    },
+    {
+      id: 'struct-5',
+      title: '5. Descriptive Text: Identification & Description (Mendeskripsikan Teman)',
+      desc: 'Struktur Descriptive Text terdiri atas: (a) Identification: memperkenalkan siapa orang yang dideskripsikan, dan (b) Description: menjelaskan ciri fisik (tall, slim, wavy hair, wearing glasses/hijab), sifat (friendly, cheerful, diligent), serta aktivitas/kegemarannya.'
     }
   ],
   languageFeatures: [
     {
       id: 'feat-1',
-      name: 'Imperative Sentences (Kalimat Perintah)',
-      example: 'Peel the bananas! / Pour the oil into the pan! / Stir the batter gently!'
+      name: 'Pronouns (Kata Ganti Subjek & Kepemilikan / Possessive Adjectives)',
+      example: 'Subject: I, You, He, She, We, They • Possessive: My name, Your hobby, His bicycle, Her glasses, Our class'
     },
     {
       id: 'feat-2',
-      name: 'Action Verbs (Kata Kerja Aksi Memasak)',
-      example: 'Peel, chop, slice, grate, pour, stir, mix, dip, fry, boil, drain, serve'
+      name: 'To Be in Simple Present Tense (am, is, are)',
+      example: 'I am Galang (13 years old) • He is from Kalimantan • She is very friendly • They are my classmates'
     },
     {
       id: 'feat-3',
-      name: 'Sequence Adverbs (Kata Penghubung Urutan)',
-      example: 'First, Second, Next, Then, After that, Finally'
+      name: 'Prepositions of Place & Origin (from, in, on, at)',
+      example: 'from Kalimantan (asal) • in Banjarbaru (kota) • on Jalan Sumatera (nama jalan) • at Jalan Sumatera No. 12 (alamat lengkap)'
     },
     {
       id: 'feat-4',
-      name: 'Adverbials of Quantity & Manner (Keterangan Takaran & Cara)',
-      example: '2 tablespoons of sugar / fry until golden brown and crispy'
+      name: 'Simple Present Verbs & Have/Has (Kepemilikan Ciri & Kebiasaan)',
+      example: 'I live / He lives • I like / She likes reading • I have short hair / She has long straight hair and wears a hijab'
+    },
+    {
+      id: 'feat-5',
+      name: 'Descriptive Adjectives (Kata Sifat Ciri Fisik & Kepribadian)',
+      example: 'Physical: tall, short, slim, curly/straight/wavy hair • Personality: friendly, kind, polite, cheerful, independent, diligent'
     }
   ],
   texts: [
     {
       id: 'rec-1',
-      title: 'How to Make Sweet Potato Fritters',
-      category: 'Food Recipe (Makanan Ringan)',
-      servings: '4 porsi',
-      timeMinutes: '20 menit',
+      title: 'Poin 1: Introducing Myself (Galang from Kalimantan)',
+      category: '1. Introducing Myself (Perkenalan Diri)',
+      servings: 'Unit 1 • Section 1',
+      timeMinutes: '5 menit baca',
       difficulty: 'Mudah',
-      goal: 'To make delicious and crispy sweet potato fritters for an afternoon family snack.',
+      goal: 'Memahami dan mempraktikkan cara memperkenalkan identitas diri sendiri (Nama, Asal, Alamat, Usia, Hobi, dan Kesukaan) secara lengkap dan runtut.',
       ingredients: [
-        '2 medium sweet potatoes (ubi jalar)',
-        '1 cup of wheat flour (tepung terigu)',
-        '2 tablespoons of granulated sugar',
-        '1/2 teaspoon of salt',
-        '150 ml of clean water',
-        'Cooking oil for deep frying'
+        'Greeting (Salam): "Hello, friends! Good morning."',
+        'Opening: "Let me introduce myself."',
+        'Full Name & Nickname: "My name is Galang Pratama. You can call me Galang."',
+        'Origin (Asal): "I am from Banjarbaru, South Kalimantan."',
+        'Address (Alamat): "I live on Jalan Sumatera No. 15."',
+        'Age & Grade (Usia & Kelas): "I am thirteen years old. I am in Class 7A at SMP Merdeka."',
+        'Hobby & Favorites: "My hobby is fishing. My favorite food is fried rice."',
+        'Closing: "Nice to meet you all! Thank you."'
       ],
       tools: [
-        'Peeler or kitchen knife',
-        'Cutting board',
-        'Medium mixing bowl',
-        'Frying pan (wajan)',
-        'Spatula (sutil)',
-        'Wire sieve or strainer (saringan peniris minyak)'
+        'Subject Pronoun "I" + To Be "am" (I am Galang, I am thirteen years old)',
+        'Possessive Adjective "My" (My name, My hobby, My favorite food)',
+        'Preposition "from" untuk asal daerah (I am from Kalimantan)',
+        'Preposition "in" (kota), "on" (nama jalan), "at" (alamat bernomor rumah)',
+        'Gerund (Verb-ing) setelah kata hobby is / like (fishing, cycling, reading)'
       ],
       steps: [
-        'First, peel the sweet potatoes and wash them thoroughly with running water.',
-        'Next, cut the sweet potatoes into thin, even slices using a sharp knife.',
-        'Then, mix flour, sugar, salt, and water in a bowl to make a smooth coating batter.',
-        'After that, dip each sweet potato slice into the batter until well coated.',
-        'Next, heat cooking oil in a frying pan and fry the slices over medium heat until golden brown and crispy.',
-        'Finally, drain the excess cooking oil using a sieve and serve the sweet potato fritters while warm.'
+        'Hello, everyone! Good morning. Let me introduce myself.',
+        'My full name is Galang Pratama, and you can call me Galang.',
+        'I am originally from Kalimantan. Right now, I live on Jalan Sumatera with my parents and my sister.',
+        'I am thirteen years old, and I am a new seventh-grade student at SMP Merdeka.',
+        'My hobby is fishing. I usually go fishing at the river near my house on weekends.',
+        'My favorite food is Indonesian fried rice, and my favorite drink is cold sweet tea. Nice to meet you all!'
       ],
-      languageNotes: 'Action Verbs: peel, wash, cut, mix, dip, fry, drain, serve. Sequence words: First, Next, Then, After that, Finally.',
-      audioScript: 'How to Make Sweet Potato Fritters. First, peel the sweet potatoes and wash them thoroughly with running water. Next, cut them into thin slices and coat them with flour batter. Then, fry them in hot cooking oil until crispy. Finally, drain excess oil and serve the fritters while warm.',
+      languageNotes: 'Gunakan "You can call me..." untuk menyebutkan nama panggilan (nickname). Gunakan "on" untuk nama jalan tanpa nomor (on Jalan Sumatera) dan "at" jika diikuti nomor rumah (at Jalan Sumatera No. 15).',
+      audioScript: 'Hello, everyone! Good morning. Let me introduce myself. My full name is Galang Pratama, and you can call me Galang. I am from Kalimantan, and I live on Jalan Sumatera. I am thirteen years old. My hobby is fishing, and my favorite food is fried rice. Nice to meet you all!',
       lastUpdated: new Date().toISOString()
     },
     {
       id: 'rec-2',
-      title: "Galang's Crispy Banana Fritters",
-      category: 'Food Recipe (Gorengan Tradisional)',
-      servings: '5 porsi',
-      timeMinutes: '15 menit',
+      title: 'Poin 2: Introducing Others (Memperkenalkan Teman & Orang Lain)',
+      category: '2. Introducing Others (Perkenalan Orang Lain)',
+      servings: 'Unit 1 • Section 2',
+      timeMinutes: '5 menit baca',
       difficulty: 'Mudah',
-      goal: 'To make crispy Indonesian fried bananas with sweet grated cheddar cheese on top.',
+      goal: 'Memahami ungkapan untuk memperkenalkan teman, sahabat, atau anggota keluarga kepada orang lain beserta cara meresponsnya dengan sopan.',
       ingredients: [
-        '4 ripe bananas (pisang kepok/raja)',
-        '1 cup of all-purpose flour',
-        '1 tablespoon of white sugar',
-        '1/4 teaspoon of salt',
-        '200 ml of water',
-        'Cooking oil',
-        'Grated cheddar cheese or chocolate sprinkles (optional topping)'
+        'Introducing a Friend: "Hi Monita, this is my new friend, Andre."',
+        'Formal/Polite Introduction: "Let me introduce my classmate. Her name is Monita."',
+        'Stating Friend\'s Origin: "He is from Pontianak." / "She comes from Medan."',
+        'Stating Friend\'s Address & Age: "He lives on Jalan Teratai. He is 13 years old."',
+        'Stating Friend\'s Hobby: "He likes playing badminton and cycling."',
+        'Greeting Response: "Hi, Andre! Nice to meet you." -> "Nice to meet you too, Monita."'
       ],
       tools: [
-        'Frying pan',
-        'Wooden spatula',
-        'Mixing bowl',
-        'Serving plate',
-        'Cheese grater'
+        'Third-Person Subject Pronouns: "He" (dia laki-laki) dan "She" (dia perempuan)',
+        'Possessive Adjectives: "His" (miliknya laki-laki: His name) dan "Her" (miliknya perempuan: Her hobby)',
+        'Simple Present Tense Verb + s/es untuk subjek He/She (He lives, She likes, He comes from)',
+        'Demonstrative Pronoun: "This is..." untuk menunjuk dan memperkenalkan seseorang'
       ],
       steps: [
-        'First, peel the ripe bananas and cut each banana in half lengthwise.',
-        'Next, mix flour, water, sugar, and salt in a bowl to create a smooth, lump-free batter.',
-        'Then, dip the sliced bananas into the batter until evenly coated.',
-        'After that, fry the coated bananas in hot cooking oil until golden brown on both sides.',
-        'Finally, place the fritters on a plate and sprinkle grated cheese generously on top.'
+        'Galang: "Hi, Monita! Let me introduce my new friend. This is Andre. Andre, this is Monita, my classmate in Class 7A."',
+        'Andre: "Hello, Monita! Nice to meet you."',
+        'Monita: "Hi, Andre! Nice to meet you too. Where are you from, Andre?"',
+        'Galang: "He is from Pontianak, West Kalimantan. Now he lives on Jalan Teratai near our school."',
+        'Monita: "That is great! What is your hobby, Andre?"',
+        'Andre: "I love cycling and playing badminton. Galang also likes playing badminton with me."',
+        'Monita: "Awesome! My hobby is reading novels. See you in class tomorrow!"'
       ],
-      languageNotes: 'Focus on "dip into the batter" and "fry until golden brown". Imperative form starts directly with Verb 1.',
-      audioScript: "Galang's Crispy Banana Fritters. First, peel the bananas and cut each banana in half. Next, mix flour, water, and sugar to make a smooth batter. Then, dip the sliced bananas into the batter. After that, fry them in hot cooking oil until golden brown. Finally, place them on a plate and sprinkle grated cheese on top.",
+      languageNotes: 'Saat memperkenalkan orang ketiga tunggal (He/She), perhatikan penambahan akhiran -s/-es pada kata kerja (Verb): "He lives...", "She likes...", "He studies...".',
+      audioScript: 'Hi, Monita! Let me introduce my new friend. This is Andre. Andre, this is Monita, my classmate. Hello, Monita! Nice to meet you. Hi, Andre! Nice to meet you too. He is from Pontianak, and he loves cycling and playing badminton.',
       lastUpdated: new Date().toISOString()
     },
     {
       id: 'rec-3',
-      title: 'How to Make Warm Sweet Tea',
-      category: 'Beverage Recipe (Minuman Hangat)',
-      servings: '1 cangkir',
-      timeMinutes: '5 menit',
+      title: 'Poin 3: Asking & Telling About Hobbies (Unit 2: I Love Fishing)',
+      category: '3. Hobbies & Daily Identities (Hobi & Kegemaran)',
+      servings: 'Unit 2 • Hobbies',
+      timeMinutes: '5 menit baca',
       difficulty: 'Mudah',
-      goal: 'To prepare a warm, comforting cup of sweet black tea for breakfast.',
+      goal: 'Menanyakan dan menceritakan hobi, peralatan yang digunakan, serta seberapa sering (frekuensi) melakukan kegiatan kegemaran tersebut.',
       ingredients: [
-        '1 black tea bag (kantong teh celup)',
-        '2 teaspoons of granulated sugar',
-        '200 ml of hot or warm water'
+        'Asking Hobby: "What is your hobby?" / "What do you like doing in your free time?"',
+        'Telling Singular Hobby: "My hobby is fishing." / "I love reading comic books."',
+        'Telling Plural Hobbies: "My hobbies are singing and listening to music."',
+        'Asking Frequency: "How often do you go cycling?" -> "Twice a week / Every Sunday."',
+        'Asking Tools/Equipment: "What do you need for badminton?" -> "I need a racket and a shuttlecock."',
+        'Telling Friend\'s Hobby: "Sinta likes jogging. She goes jogging every Sunday morning."'
       ],
       tools: [
-        'Ceramic tea cup or glass mug',
-        'Teaspoon for stirring',
-        'Water kettle or dispenser'
+        'Pola Kalimat Kesukaan: Subject + like/love/enjoy + Verb-ing (I like swimming, She loves drawing)',
+        'Adverbs of Frequency (Keterangan Frekuensi): always, usually, often, sometimes, once a week, every weekend',
+        'Kosakata Alat Hobi: fishing rod & bucket (memancing), racket & shuttlecock (bulu tangkis), bicycle & helmet (bersepeda), mobile phone (bermain gim)'
       ],
       steps: [
-        'First, place one tea bag into a clean cup.',
-        'Next, pour 200 ml of fresh warm water into the cup.',
-        'Then, dip the tea bag up and down several times until the water turns rich reddish-brown.',
-        'After that, add two teaspoons of sugar and stir well using a teaspoon until dissolved.',
-        'Finally, remove the tea bag from the cup and your warm sweet tea is ready to enjoy.'
+        'Galang and his friends at SMP Merdeka have different hobbies that they enjoy in their free time.',
+        'Galang loves fishing. He prepares a fishing rod, a small bucket, and fish bait before going to the river every Sunday.',
+        'Monita\'s hobby is reading. She likes reading science-fiction novels and adventure stories in the school library.',
+        'Andre enjoys mobile gaming and cycling. He rides his red bicycle around the neighborhood every afternoon.',
+        'Meanwhile, Sinta and Ibu Posma love playing badminton. They use rackets and shuttlecocks to practice twice a week.'
       ],
-      languageNotes: 'Verb "dip" means to put something briefly into a liquid. "Stir" means to agitate with a spoon.',
-      audioScript: 'How to Make Warm Sweet Tea. First, place the tea bag into a cup. Next, pour warm water into the cup. Then, dip the tea bag several times until the water turns reddish-brown. After that, add two teaspoons of sugar and stir well. Finally, warm sweet tea is ready to serve!',
+      languageNotes: 'Jika hobi hanya satu, gunakan "My hobby IS...". Jika lebih dari satu, gunakan bentuk jamak "My hobbies ARE... and...". Kata kerja setelah is/like/love/enjoy wajib berbentuk Verb-ing (Gerund).',
+      audioScript: 'Galang and his friends have different hobbies. Galang loves fishing at the river every Sunday. Monita likes reading adventure stories in the library. Andre enjoys cycling around the neighborhood, while Sinta loves playing badminton twice a week.',
       lastUpdated: new Date().toISOString()
     },
     {
       id: 'rec-4',
-      title: 'Special Indonesian Fried Rice (Nasi Goreng Spesial)',
-      category: 'Food Recipe (Makanan Utama)',
-      servings: '2 porsi',
-      timeMinutes: '15 menit',
+      title: 'Poin 4: Descriptive Text — Describing People (Unit 3: My Friends and I)',
+      category: '4. Descriptive Text (Mendeskripsikan Seseorang)',
+      servings: 'Unit 3 • Descriptive Text',
+      timeMinutes: '6 menit baca',
       difficulty: 'Sedang',
-      goal: 'To cook quick, savory, and fragrant Indonesian fried rice using leftover cold rice.',
+      goal: 'Memahami struktur Descriptive Text (Identification & Description) untuk mendeskripsikan ciri fisik (Physical Appearance) dan kepribadian (Personality) teman.',
       ingredients: [
-        '2 plates of cold cooked white rice',
-        '2 eggs',
-        '2 cloves of garlic and 3 shallots (minced)',
-        '2 tablespoons of sweet soy sauce (kecap manis)',
-        '1 tablespoon of vegetable cooking oil',
-        '1/2 teaspoon of salt and pepper to taste',
-        'Fried shallots and cucumber slices for garnish'
+        'Structure 1 - Identification: Paragraf pembuka yang memperkenalkan nama dan hubungan dengan orang yang dideskripsikan.',
+        'Structure 2 - Description: Paragraf isi yang merinci ciri fisik, pakaian/aksesori, sifat/karakter, dan hobi.',
+        'Physical Appearance (Tinggi & Tubuh): tall (tinggi), short (pendek), slim/slender (ramping), well-built (tegap), chubby (gempal).',
+        'Hair & Face (Rambut & Wajah): straight hair (lurus), wavy hair (bergelombang), curly hair (keriting), bald, round face, bright smile.',
+        'Special Features / Clothing: wears glasses (berkacamata), wears a hijab (berhijab), uses crutches (menggunakan kruk), has a mole (punya tahi lalat).',
+        'Personality Traits (Sifat): friendly (ramah), kind (baik hati), cheerful (ceria), polite (sopan), diligent (rajin), independent (mandiri), helpful (suka menolong).'
       ],
       tools: [
-        'Wok or large skillet',
-        'Cooking spatula',
-        'Knife and cutting board',
-        'Stove'
+        'Pola 1 (To Be + Adjective) untuk sifat & postur: "Made IS tall, friendly, and independent."',
+        'Pola 2 (Have/Has + Adjective + Noun) untuk kepemilikan ciri fisik: "He HAS short straight black hair." / "She HAS brown eyes."',
+        'Pola 3 (Wear/Wears + Noun) untuk aksesori/pakaian: "Monita WEARS glasses and a neat hijab."',
+        'Simple Present Tense karena mendeskripsikan fakta dan karakteristik tetap seseorang.'
       ],
       steps: [
-        'First, heat vegetable oil in a wok over medium heat.',
-        'Next, add minced garlic and shallots, then sauté until fragrant and lightly browned.',
-        'Then, push the aromatics aside, crack the eggs into the wok, and scramble them quickly.',
-        'After that, add the cold rice, pour sweet soy sauce, salt, and pepper, and stir-fry vigorously until evenly mixed.',
-        'Finally, turn off the heat, transfer to serving plates, and garnish with fried shallots and cucumber.'
+        '[IDENTIFICATION] Let me tell you about my best friend, Made. He is fourteen years old, and he is my classmate in Class 7A at SMP Merdeka.',
+        '[DESCRIPTION - Physical Appearance] Made is a tall boy with a friendly smile. He has short, straight black hair, brown eyes, and tan skin. He uses crutches to walk, and he always carries a black backpack to school.',
+        '[DESCRIPTION - Personality] Made is a very cheerful, polite, and independent person. He is never shy to greet people first, and he is always helpful to his friends in class.',
+        '[DESCRIPTION - Hobby & Habit] His favorite sport is wheelchair basketball. He practices basketball earnestly every Wednesday and Saturday afternoon. Everyone in Class 7A loves being friends with Made.'
       ],
-      languageNotes: 'Culinary Action Verbs: heat, sauté, crack, scramble, add, pour, stir-fry, transfer, garnish.',
-      audioScript: 'Special Indonesian Fried Rice. First, heat vegetable oil in a wok. Next, add minced garlic and sauté until fragrant. Then, scramble the eggs. After that, add cold rice and sweet soy sauce, and stir-fry evenly. Finally, serve hot with fried shallots.',
+      languageNotes: 'Perbedaan penting dalam Descriptive Text: Gunakan "IS/AM/ARE" untuk kata sifat langsung (He is tall, She is slim, He is friendly). Gunakan "HAS/HAVE" untuk kata benda/bagian tubuh (He has curly hair, She has a pointed nose).',
+      audioScript: 'Descriptive Text: My Best Friend, Made. Identification: Made is fourteen years old and he is my classmate at SMP Merdeka. Description: Made is a tall boy with a friendly smile. He has short straight black hair. He uses crutches to walk. Made is very cheerful, polite, and independent. His favorite sport is wheelchair basketball.',
       lastUpdated: new Date().toISOString()
     }
   ]

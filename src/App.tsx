@@ -42,7 +42,7 @@ const STORAGE_KEY_SUBMISSIONS = 'en_nusantara_quiz_submissions_v1';
 const STORAGE_KEY_PIN = 'en_nusantara_teacher_pin_v1';
 const STORAGE_KEY_VIOLATION = 'en_nusantara_active_violation_v1';
 const STORAGE_KEY_QUESTIONS = 'en_nusantara_quiz_questions_v1';
-const STORAGE_KEY_PROCEDURE_TEXT = 'en_nusantara_procedure_text_v1';
+const STORAGE_KEY_PROCEDURE_TEXT = 'en_nusantara_learning_material_v2';
 
 export default function App() {
   const [currentView, setCurrentView] = useState<ViewState>('start');
@@ -172,10 +172,21 @@ export default function App() {
 
     const unsubscribeProcedureText = subscribeToProcedureText((cloudConfig) => {
       if (cloudConfig) {
-        setProcedureTextConfig(cloudConfig);
-        try {
-          localStorage.setItem(STORAGE_KEY_PROCEDURE_TEXT, JSON.stringify(cloudConfig));
-        } catch {}
+        const isLegacyProcedure =
+          cloudConfig.definition?.toLowerCase().includes('procedure text is a text') ||
+          cloudConfig.texts?.[0]?.title?.includes('Sweet Potato Fritters');
+        if (isLegacyProcedure) {
+          setProcedureTextConfig(INITIAL_PROCEDURE_TEXT_CONFIG);
+          try {
+            localStorage.setItem(STORAGE_KEY_PROCEDURE_TEXT, JSON.stringify(INITIAL_PROCEDURE_TEXT_CONFIG));
+          } catch {}
+          saveProcedureTextToFirebase(INITIAL_PROCEDURE_TEXT_CONFIG).catch(() => {});
+        } else {
+          setProcedureTextConfig(cloudConfig);
+          try {
+            localStorage.setItem(STORAGE_KEY_PROCEDURE_TEXT, JSON.stringify(cloudConfig));
+          } catch {}
+        }
       }
     });
 

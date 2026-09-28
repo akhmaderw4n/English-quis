@@ -781,7 +781,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
             }`}
           >
             <FileText className="w-4 h-4" />
-            <span>Edit Procedure Text</span>
+            <span>Edit Materi Pembelajaran</span>
             <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-black uppercase ${
               activeTab === 'procedure' ? 'bg-amber-600 text-white' : 'bg-amber-100 text-amber-900'
             }`}>

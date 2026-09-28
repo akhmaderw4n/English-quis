@@ -414,10 +414,10 @@ export const ProcedureTextEditor: React.FC<ProcedureTextEditorProps> = ({
       <body>
         <div class="header">
           <span class="badge">Buku Siswa English for Nusantara</span>
-          <span class="badge">Chapter 2: Culinary and Me</span>
+          <span class="badge">Chapter 1: Introducing my self and other</span>
           <span class="badge">Kelas 7 SMP</span>
           <h1>${recipe.title}</h1>
-          <p style="margin: 0; color: #64748b; font-size: 14px;">Materi Ajar Bahasa Inggris: Procedure Text &bull; Guru Pengampu: Eli Ermawati, S.Pd.</p>
+          <p style="margin: 0; color: #64748b; font-size: 14px;">Materi Ajar Bahasa Inggris: Introducing my self and other &bull; Guru Pengampu: Eli Ermawati, S.Pd.</p>
         </div>
 
         <div class="meta-box">
@@ -510,10 +510,10 @@ export const ProcedureTextEditor: React.FC<ProcedureTextEditorProps> = ({
             </div>
             <h2 className="text-xl sm:text-2xl font-black tracking-tight text-white flex items-center gap-2">
               <FileText className="w-6 h-6 text-amber-200" />
-              <span>Edit Materi &amp; Teks Prosedur (Procedure Text)</span>
+              <span>Edit Materi Pembelajaran: Introducing my self and other</span>
             </h2>
             <p className="text-xs sm:text-sm text-amber-100/90 mt-1 max-w-2xl">
-              Sesuaikan definisi, struktur generik (*Goal, Ingredients, Tools, Steps*), ciri kebahasaan (*Action Verbs &amp; Sequence Words*), dan perbendaharaan teks resep nusantara yang dipelajari siswa.
+              Sesuaikan definisi, poin-poin materi (<em>Introducing Myself, Introducing Others &amp; Descriptive Text</em>), unsur kebahasaan, serta contoh teks &amp; dialog yang dipelajari siswa.
             </p>
           </div>
 
@@ -1133,7 +1133,7 @@ export const ProcedureTextEditor: React.FC<ProcedureTextEditorProps> = ({
               Simulasi Tampilan Peserta Didik
             </span>
             <h3 className="text-xl sm:text-2xl font-black text-slate-900">
-              Modul Pembelajaran: Procedure Text
+              Materi Pembelajaran: Introducing my self and other
             </h3>
             <p className="text-xs text-slate-600">
               Ini adalah tampilan yang dapat diakses siswa sebelum memulai kuis atau saat mempelajari materi.

@@ -82,7 +82,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               className="hidden lg:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 text-xs font-bold border border-amber-200 transition-colors cursor-pointer"
             >
               <FileText className="w-3.5 h-3.5 text-amber-600" />
-              <span>Materi Procedure Text</span>
+              <span>Materi: Introducing My Self &amp; Other</span>
             </button>
           )}
           {/* Cloud Database Sync Status */}

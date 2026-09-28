@@ -15,7 +15,6 @@ import { TeacherDashboard } from './components/TeacherDashboard';
 import { TeacherPinModal } from './components/TeacherPinModal';
 import { ViolationScreen } from './components/ViolationScreen';
 import { ProcedureTextStudyModal } from './components/ProcedureTextStudyModal';
-import { StudentRestrictionPanel } from './components/StudentRestrictionPanel';
 import { isSoundEnabled, setSoundEnabled, playClickSound, stopSpeech, playViolationAlertSound } from './utils/audio';
 import {
   subscribeToSubmissions,
@@ -99,7 +98,6 @@ export default function App() {
 
   // Student study modal state & "1 User 1 Kali Lihat" tracking
   const [isProcedureStudyOpen, setIsProcedureStudyOpen] = useState(false);
-  const [isRestrictionModalOpen, setIsRestrictionModalOpen] = useState(false);
   const [studentRestrictions, setStudentRestrictions] = useState<StudentRestrictionConfig>(() => {
     try {
       const raw = localStorage.getItem(STORAGE_KEY_STUDENT_RESTRICTIONS);
@@ -742,7 +740,6 @@ export default function App() {
             totalQuestions={questions.length}
             restrictions={studentRestrictions}
             submissions={submissions}
-            onOpenRestrictionMenu={() => setIsRestrictionModalOpen(true)}
           />
         )}
 
@@ -819,18 +816,6 @@ export default function App() {
           />
         )}
       </main>
-
-      {/* Student Restriction Settings Modal (Accessible from StartScreen) */}
-      {isRestrictionModalOpen && (
-        <StudentRestrictionPanel
-          config={studentRestrictions}
-          submissions={submissions}
-          onUpdateConfig={handleUpdateStudentRestrictions}
-          onResetStudyModuleViews={handleResetStudyModuleViews}
-          isModal={true}
-          onCloseModal={() => setIsRestrictionModalOpen(false)}
-        />
-      )}
 
       {/* Student Procedure Text Study Material Modal */}
       <ProcedureTextStudyModal

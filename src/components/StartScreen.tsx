@@ -13,7 +13,6 @@ import {
   ChevronDown,
   Lock,
   EyeOff,
-  Sliders,
   Clock,
   ShieldCheck,
   AlertTriangle
@@ -31,7 +30,6 @@ interface StartScreenProps {
   totalQuestions?: number;
   restrictions?: StudentRestrictionConfig;
   submissions?: QuizSubmission[];
-  onOpenRestrictionMenu?: () => void;
 }
 
 export const StartScreen: React.FC<StartScreenProps> = ({
@@ -42,7 +40,6 @@ export const StartScreen: React.FC<StartScreenProps> = ({
   totalQuestions = 10,
   restrictions = INITIAL_STUDENT_RESTRICTION_CONFIG,
   submissions = [],
-  onOpenRestrictionMenu,
 }) => {
   const [name, setName] = useState('');
   const [studentClass, setStudentClass] = useState('7A');
@@ -154,54 +151,35 @@ export const StartScreen: React.FC<StartScreenProps> = ({
           </div>
         </div>
 
-        {/* Study Module & Student Restriction Menu Controls */}
-        <div className="mt-3.5 flex flex-col items-center gap-2">
-          <div className="flex flex-wrap items-center justify-center gap-2">
-            {/* Study Module Button (1 User 1 Kali Lihat) */}
-            {onOpenProcedureStudy && (
-              isStudyLocked ? (
-                <div className="inline-flex flex-col items-center gap-1 px-4 py-2 rounded-xl bg-slate-100 text-slate-600 border border-slate-300 text-xs sm:text-sm font-bold shadow-2xs select-none max-w-md">
-                  <div className="flex items-center gap-2 text-rose-700">
-                    <Lock className="w-4 h-4 text-rose-600 shrink-0" />
-                    <span>{studyLockLabel}</span>
-                  </div>
-                  <div className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-600">
-                    <EyeOff className="w-3.5 h-3.5 text-slate-500 shrink-0" />
-                    <span>
-                      Batas akses: <strong className="text-slate-900">1 User 1 Kali Lihat</strong>
-                      {name.trim() ? ` (${name.trim()})` : ''}
-                    </span>
-                  </div>
+        {/* Study Module Button (1 User 1 Kali Lihat) */}
+        <div className="mt-3.5 flex flex-col items-center gap-1.5">
+          {onOpenProcedureStudy && (
+            isStudyLocked ? (
+              <div className="inline-flex flex-col items-center gap-1 px-4 py-2 rounded-xl bg-slate-100 text-slate-600 border border-slate-300 text-xs sm:text-sm font-bold shadow-2xs select-none max-w-md">
+                <div className="flex items-center gap-2 text-rose-700">
+                  <Lock className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>{studyLockLabel}</span>
                 </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={onOpenProcedureStudy}
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 text-xs sm:text-sm font-bold shadow-2xs transition-all active:scale-98 cursor-pointer"
-                >
-                  <BookOpen className="w-4 h-4 text-amber-600" />
-                  <span>Pelajari Modul: Introducing My Self and Other</span>
-                  <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-                </button>
-              )
-            )}
-
-            {/* Menu Batasan Pengerjaan Siswa Button */}
-            {onOpenRestrictionMenu && (
+                <div className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-600">
+                  <EyeOff className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                  <span>
+                    Batas akses: <strong className="text-slate-900">1 User 1 Kali Lihat</strong>
+                    {name.trim() ? ` (${name.trim()})` : ''}
+                  </span>
+                </div>
+              </div>
+            ) : (
               <button
                 type="button"
-                onClick={() => {
-                  playClickSound();
-                  onOpenRestrictionMenu();
-                }}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs sm:text-sm font-bold shadow-2xs transition-all active:scale-98 cursor-pointer"
-                title="Buka Menu Pengaturan Batasan Pengerjaan Siswa"
+                onClick={onOpenProcedureStudy}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 text-xs sm:text-sm font-bold shadow-2xs transition-all active:scale-98 cursor-pointer"
               >
-                <Sliders className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                <span>Batasan Pengerjaan Siswa</span>
+                <BookOpen className="w-4 h-4 text-amber-600" />
+                <span>Pelajari Modul: Introducing My Self and Other</span>
+                <Sparkles className="w-3.5 h-3.5 text-amber-500" />
               </button>
-            )}
-          </div>
+            )
+          )}
 
           {!isStudyLocked && (
             <span className="text-[11px] text-slate-500 font-medium">

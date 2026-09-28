@@ -3,7 +3,7 @@ import { Question, QuizSubmission, ProcedureTextConfig, ProcedureTextRecipe } fr
 export const QUIZ_METADATA = {
   title: 'Interactive English Quiz: Introducing My self and other',
   topic: 'Introducing Myself & Others / Procedure Text (Culinary and Me)',
-  chapter: 'Chapter 2: Culinary and Me & Chapter 1',
+  chapter: 'Chapter 1: Introducing my self and other',
   unit: 'Unit 3: A Secret Recipe & Self Introduction',
   textbook: 'English for Nusantara (SMP/MTs Kelas VII - Kurikulum Merdeka)',
   branding: 'Kuis by Eli Ermawati, S.Pd.',

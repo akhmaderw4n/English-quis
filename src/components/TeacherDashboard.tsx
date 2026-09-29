@@ -43,9 +43,10 @@ import {
   Headphones,
   Pencil,
   Plus,
-  Sliders
+  Sliders,
+  Image as ImageIcon
 } from 'lucide-react';
-import { QuizSubmission, QuizViolationRecord, Question, ProcedureTextConfig, StudentRestrictionConfig } from '../types';
+import { QuizSubmission, QuizViolationRecord, Question, ProcedureTextConfig, StudentRestrictionConfig, DashboardBackgroundConfig } from '../types';
 import { QUIZ_QUESTIONS, QUIZ_METADATA, INITIAL_STUDENT_SUBMISSIONS, INITIAL_PROCEDURE_TEXT_CONFIG, INITIAL_STUDENT_RESTRICTION_CONFIG, detectCrossClassDuplicateSubmissions } from '../data/quizData';
 import { ReviewModal } from './ReviewModal';
 import { TeacherInputStudent } from './TeacherInputStudent';
@@ -54,6 +55,8 @@ import { QuestionEditModal } from './QuestionEditModal';
 import { PermanentDeleteModal } from './PermanentDeleteModal';
 import { ProcedureTextEditor } from './ProcedureTextEditor';
 import { StudentRestrictionPanel } from './StudentRestrictionPanel';
+import { DashboardBackgroundManager } from './DashboardBackgroundManager';
+import { INITIAL_DASHBOARD_BACKGROUND_CONFIG, resolveActiveBackgroundImageUrl } from '../utils/dashboardBackground';
 import { downloadWordCompatibleDoc } from '../utils/wordQuestionParser';
 import { playClickSound, playUnlockSuccessSound, playViolationAlertSound } from '../utils/audio';
 import {
@@ -91,6 +94,8 @@ interface TeacherDashboardProps {
   studentRestrictions?: StudentRestrictionConfig;
   onUpdateStudentRestrictions?: (newConfig: StudentRestrictionConfig) => Promise<void> | void;
   onResetStudyModuleViews?: () => void;
+  dashboardBackground?: DashboardBackgroundConfig;
+  onUpdateDashboardBackground?: (newConfig: DashboardBackgroundConfig) => Promise<void> | void;
 }
 
 export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
@@ -118,8 +123,10 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
   studentRestrictions = INITIAL_STUDENT_RESTRICTION_CONFIG,
   onUpdateStudentRestrictions,
   onResetStudyModuleViews,
+  dashboardBackground = INITIAL_DASHBOARD_BACKGROUND_CONFIG,
+  onUpdateDashboardBackground,
 }) => {
-  const [activeTab, setActiveTab] = useState<'recap' | 'input' | 'analysis' | 'bank' | 'procedure' | 'restrictions' | 'settings' | 'violations'>('recap');
+  const [activeTab, setActiveTab] = useState<'recap' | 'input' | 'analysis' | 'bank' | 'procedure' | 'restrictions' | 'background' | 'settings' | 'violations'>('recap');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedClass, setSelectedClass] = useState<string>('ALL');
   const [sortField, setSortField] = useState<'absen' | 'score' | 'name' | 'time'>('absen');
@@ -556,10 +563,23 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     setTimeout(() => setQuestionBankToastMsg(null), 4500);
   };
 
+  const activeBannerBgUrl = resolveActiveBackgroundImageUrl(dashboardBackground);
+
   return (
     <div className="py-4 sm:py-8 max-w-6xl mx-auto px-3.5 sm:px-6">
       {/* Top Banner */}
-      <div className="bg-slate-900 text-white rounded-2xl sm:rounded-3xl p-4.5 sm:p-8 shadow-xl border border-slate-800 mb-6 sm:mb-8 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 sm:gap-6">
+      <div
+        className="bg-slate-900 text-white rounded-2xl sm:rounded-3xl p-4.5 sm:p-8 shadow-xl border border-slate-800 mb-6 sm:mb-8 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 sm:gap-6 relative overflow-hidden"
+        style={
+          dashboardBackground.applyToBanner && activeBannerBgUrl
+            ? {
+                backgroundImage: `linear-gradient(to right, rgba(15, 23, 42, 0.88), rgba(15, 23, 42, 0.72)), url("${activeBannerBgUrl}")`,
+                backgroundSize: 'cover',
+                backgroundPosition: 'center',
+              }
+            : undefined
+        }
+      >
         <div>
           <div className="flex flex-wrap items-center gap-2 mb-2 sm:mb-3">
             <div className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1 rounded-full bg-amber-500/20 text-amber-300 font-bold text-xs border border-amber-500/30">
@@ -588,7 +608,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
           <h1 className="text-xl sm:text-3xl font-extrabold tracking-tight text-slate-100">
             Dashboard Guru: Rekap &amp; Penilaian
           </h1>
-          <p className="text-xs sm:text-sm text-slate-400 mt-1 max-w-2xl">
+          <p className="text-xs sm:text-sm text-slate-300 mt-1 max-w-2xl">
             Kuis: <strong>Interactive English Quiz: Introducing My self and other</strong> &bull; Bab <strong>"Introducing My self and other" (Materi Descriptive text)</strong> &bull; Buku Siswa <em>English for Nusantara</em> Kelas 7 SMP
           </p>
         </div>
@@ -598,12 +618,29 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
             type="button"
             onClick={() => {
               playClickSound();
+              setActiveTab('background');
+            }}
+            className={`w-full sm:w-auto px-4 py-2.5 rounded-xl font-bold text-xs sm:text-sm transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-xs border ${
+              activeTab === 'background'
+                ? 'bg-amber-500 text-slate-950 border-amber-400'
+                : 'bg-slate-800/90 hover:bg-slate-700 text-white border-slate-700'
+            }`}
+            title="Upload dan ubah gambar background dashboard kapan saja"
+          >
+            <ImageIcon className="w-4 h-4 text-amber-400" />
+            <span>Ubah Background</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              playClickSound();
               setActiveTab('restrictions');
             }}
             className={`w-full sm:w-auto px-4 py-2.5 rounded-xl font-bold text-xs sm:text-sm transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-xs border ${
               activeTab === 'restrictions'
                 ? 'bg-amber-500 text-slate-950 border-amber-400'
-                : 'bg-slate-800 hover:bg-slate-700 text-white border-slate-700'
+                : 'bg-slate-800/90 hover:bg-slate-700 text-white border-slate-700'
             }`}
           >
             <Sliders className="w-4 h-4 text-amber-400" />
@@ -960,6 +997,32 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
               activeTab === 'procedure' ? 'bg-amber-600 text-white' : 'bg-amber-100 text-amber-900'
             }`}>
               {(procedureTextConfig?.texts || INITIAL_PROCEDURE_TEXT_CONFIG.texts).length} Teks
+            </span>
+          </button>
+
+          {/* Upload Background Dashboard Tab Button */}
+          <button
+            type="button"
+            onClick={() => {
+              playClickSound();
+              setActiveTab('background');
+            }}
+            className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-1.5 sm:gap-2 transition-all cursor-pointer shrink-0 whitespace-nowrap ${
+              activeTab === 'background'
+                ? 'bg-amber-500 text-white shadow-xs'
+                : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+            }`}
+          >
+            <ImageIcon className="w-4 h-4" />
+            <span>Background Dashboard</span>
+            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-black uppercase ${
+              activeTab === 'background' ? 'bg-amber-600 text-white' : 'bg-amber-100 text-amber-900'
+            }`}>
+              {dashboardBackground.mode === 'custom'
+                ? 'Upload'
+                : dashboardBackground.mode === 'preset'
+                ? 'Tema'
+                : 'Ubah'}
             </span>
           </button>
 
@@ -2109,6 +2172,16 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
           }}
           onDeleteSubmission={onDeleteSubmission}
           onResetStudyModuleViews={onResetStudyModuleViews}
+        />
+      )}
+
+      {/* Tab: MENU UPLOAD & KUSTOMISASI BACKGROUND DASHBOARD */}
+      {activeTab === 'background' && (
+        <DashboardBackgroundManager
+          config={dashboardBackground}
+          onUpdateConfig={(newConfig) => {
+            onUpdateDashboardBackground?.(newConfig);
+          }}
         />
       )}
 

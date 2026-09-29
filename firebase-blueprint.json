@@ -118,6 +118,14 @@
           "type": "number",
           "description": "Jumlah teks prosedur aktif"
         },
+        "restrictionsJson": {
+          "type": "string",
+          "description": "Konfigurasi batasan pengerjaan siswa format JSON"
+        },
+        "backgroundJson": {
+          "type": "string",
+          "description": "Konfigurasi tampilan dan gambar background dashboard format JSON"
+        },
         "updatedAt": {
           "type": "string",
           "description": "Waktu pembaruan pengaturan terakhir"

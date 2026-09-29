@@ -2,6 +2,7 @@ import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import { 
   initializeFirestore, 
+  setLogLevel,
   collection, 
   doc, 
   setDoc, 
@@ -11,19 +12,26 @@ import {
   writeBatch, 
   onSnapshot, 
   query, 
-  orderBy 
+  DocumentData
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
-import { QuizSubmission, QuizViolationRecord, Question, ProcedureTextConfig, StudentRestrictionConfig } from '../types';
+import { QuizSubmission, QuizViolationRecord, Question, ProcedureTextConfig, StudentRestrictionConfig, DashboardBackgroundConfig } from '../types';
+
+// Silence internal Firestore 10s offline-fallback console.error noise on high-latency school networks
+try {
+  setLogLevel('silent');
+} catch {
+  // Ignore if setLogLevel is unavailable in environment
+}
 
 // Initialize Firebase App & Services
 const app = initializeApp(firebaseConfig);
 
-// Initialize Firestore with forced long polling to ensure bulletproof connectivity across school firewalls, proxies, iframes, and preview sandboxes
+// Use auto-detect long polling so standard fast WebChannel is used by default and long-polling only activates if a firewall blocks streams
 export const db = initializeFirestore(
   app,
   {
-    experimentalForceLongPolling: true,
+    experimentalAutoDetectLongPolling: true,
   },
   firebaseConfig.firestoreDatabaseId
 );
@@ -56,8 +64,9 @@ export interface FirestoreErrorInfo {
 }
 
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null): never {
+  const errMsg = error instanceof Error ? error.message : String(error);
   const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
+    error: errMsg,
     authInfo: {
       userId: auth.currentUser?.uid,
       email: auth.currentUser?.email,
@@ -72,34 +81,97 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
     operationType,
     path
   };
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
-}
-
-/**
- * Validate connection to Firestore on initial boot.
- * Uses standard getDoc with graceful fallback so temporary network latency or offline mode does not emit uncaught errors.
- */
-export async function testConnection(): Promise<boolean> {
-  try {
-    const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('Connection check timeout')), 3500)
-    );
-    await Promise.race([
-      getDoc(doc(db, 'settings', 'app')),
-      timeoutPromise
-    ]);
-    return true;
-  } catch (error) {
-    console.warn('Firestore initial connection status:', error instanceof Error ? error.message : String(error));
-    return false;
+  if (errMsg.toLowerCase().includes('permission') || errMsg.toLowerCase().includes('insufficient')) {
+    console.error('Firestore Error: ', JSON.stringify(errInfo));
+  } else {
+    console.warn('Firestore operation notice:', errMsg);
   }
+  throw new Error(JSON.stringify(errInfo));
 }
 
 const SUBMISSIONS_COLLECTION = 'submissions';
 const DELETED_COLLECTION = 'deletedSubmissions';
 const SETTINGS_COLLECTION = 'settings';
 const VIOLATIONS_COLLECTION = 'violations';
+
+// Shared multiplexer for `/settings` collection so all 5 settings docs share 1 Firestore stream instead of 5 separate listeners
+type SettingsCacheMap = Record<string, DocumentData>;
+let latestSettingsMap: SettingsCacheMap = {};
+let hasSettingsSnapshotLoaded = false;
+const settingsSubscribers = new Set<(map: SettingsCacheMap) => void>();
+let sharedSettingsUnsubscribe: (() => void) | null = null;
+
+function subscribeToSharedSettings(listener: (map: SettingsCacheMap) => void): () => void {
+  settingsSubscribers.add(listener);
+  if (hasSettingsSnapshotLoaded) {
+    listener(latestSettingsMap);
+  }
+
+  if (!sharedSettingsUnsubscribe) {
+    sharedSettingsUnsubscribe = onSnapshot(
+      collection(db, SETTINGS_COLLECTION),
+      (snapshot) => {
+        const nextMap: SettingsCacheMap = {};
+        snapshot.forEach((docSnap) => {
+          nextMap[docSnap.id] = docSnap.data();
+        });
+        latestSettingsMap = nextMap;
+        hasSettingsSnapshotLoaded = true;
+        settingsSubscribers.forEach((cb) => {
+          try {
+            cb(latestSettingsMap);
+          } catch (e) {
+            console.warn('Settings subscriber callback warning:', e);
+          }
+        });
+      },
+      (err) => {
+        console.warn('Shared settings snapshot notice (operating with local cache):', err?.message || err);
+      }
+    );
+  }
+
+  return () => {
+    settingsSubscribers.delete(listener);
+    if (settingsSubscribers.size === 0 && sharedSettingsUnsubscribe) {
+      sharedSettingsUnsubscribe();
+      sharedSettingsUnsubscribe = null;
+      hasSettingsSnapshotLoaded = false;
+    }
+  };
+}
+
+/**
+ * Validate connection to Firestore on initial boot without opening redundant competing RPC streams.
+ */
+export async function testConnection(): Promise<boolean> {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    return false;
+  }
+  if (hasSettingsSnapshotLoaded) {
+    return true;
+  }
+  return new Promise<boolean>((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        unsub();
+        // Resolve true if browser is online (Firestore offline persistence handles syncing seamlessly)
+        resolve(typeof navigator !== 'undefined' ? navigator.onLine !== false : true);
+      }
+    }, 4000);
+
+    const unsub = subscribeToSharedSettings(() => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        unsub();
+        resolve(true);
+      }
+    });
+  });
+}
 
 /**
  * Real-time subscription to submissions across all devices with tombstone filtering.
@@ -287,25 +359,14 @@ export function subscribeToTeacherPin(
   onPin: (pin: string) => void,
   defaultPin: string = '1234'
 ): () => void {
-  const docRef = doc(db, SETTINGS_COLLECTION, 'app');
-
-  return onSnapshot(
-    docRef,
-    (docSnap) => {
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        if (data.teacherPin) {
-          onPin(data.teacherPin);
-          return;
-        }
-      }
-      // If not yet created in Firestore, keep defaultPin
-      onPin(defaultPin);
-    },
-    (err) => {
-      console.warn('Teacher PIN snapshot warning (falling back to local):', err);
+  return subscribeToSharedSettings((settingsMap) => {
+    const data = settingsMap['app'];
+    if (data && data.teacherPin) {
+      onPin(data.teacherPin);
+      return;
     }
-  );
+    onPin(defaultPin);
+  });
 }
 
 /**
@@ -467,33 +528,23 @@ const QUESTION_BANK_DOC = 'questionBank';
  */
 export function subscribeToQuestionBank(
   onData: (questions: Question[] | null) => void,
-  onError?: (error: Error) => void
+  _onError?: (error: Error) => void
 ): () => void {
-  const docRef = doc(db, SETTINGS_COLLECTION, QUESTION_BANK_DOC);
-  return onSnapshot(
-    docRef,
-    (docSnap) => {
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        if (data.questionsJson) {
-          try {
-            const parsed = JSON.parse(data.questionsJson);
-            if (Array.isArray(parsed) && parsed.length > 0) {
-              onData(parsed);
-              return;
-            }
-          } catch (e) {
-            console.warn('Failed to parse synchronized questionBank:', e);
-          }
+  return subscribeToSharedSettings((settingsMap) => {
+    const data = settingsMap[QUESTION_BANK_DOC];
+    if (data && data.questionsJson) {
+      try {
+        const parsed = JSON.parse(data.questionsJson);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          onData(parsed);
+          return;
         }
+      } catch (e) {
+        console.warn('Failed to parse synchronized questionBank:', e);
       }
-      onData(null);
-    },
-    (err) => {
-      console.warn('Question bank subscription notice:', err?.message || err);
-      onError?.(err);
     }
-  );
+    onData(null);
+  });
 }
 
 /**
@@ -535,33 +586,23 @@ const PROCEDURE_TEXT_DOC = 'procedureText';
  */
 export function subscribeToProcedureText(
   onData: (material: ProcedureTextConfig | null) => void,
-  onError?: (error: Error) => void
+  _onError?: (error: Error) => void
 ): () => void {
-  const docRef = doc(db, SETTINGS_COLLECTION, PROCEDURE_TEXT_DOC);
-  return onSnapshot(
-    docRef,
-    (docSnap) => {
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        if (data.procedureTextJson) {
-          try {
-            const parsed = JSON.parse(data.procedureTextJson);
-            if (parsed && typeof parsed === 'object') {
-              onData(parsed);
-              return;
-            }
-          } catch (e) {
-            console.warn('Failed to parse synchronized procedureText:', e);
-          }
+  return subscribeToSharedSettings((settingsMap) => {
+    const data = settingsMap[PROCEDURE_TEXT_DOC];
+    if (data && data.procedureTextJson) {
+      try {
+        const parsed = JSON.parse(data.procedureTextJson);
+        if (parsed && typeof parsed === 'object') {
+          onData(parsed);
+          return;
         }
+      } catch (e) {
+        console.warn('Failed to parse synchronized procedureText:', e);
       }
-      onData(null);
-    },
-    (err) => {
-      console.warn('Procedure text subscription notice:', err?.message || err);
-      onError?.(err);
     }
-  );
+    onData(null);
+  });
 }
 
 /**
@@ -603,33 +644,23 @@ const STUDENT_RESTRICTIONS_DOC = 'studentRestrictions';
  */
 export function subscribeToStudentRestrictions(
   onData: (config: StudentRestrictionConfig | null) => void,
-  onError?: (error: Error) => void
+  _onError?: (error: Error) => void
 ): () => void {
-  const docRef = doc(db, SETTINGS_COLLECTION, STUDENT_RESTRICTIONS_DOC);
-  return onSnapshot(
-    docRef,
-    (docSnap) => {
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        if (data.restrictionsJson) {
-          try {
-            const parsed = JSON.parse(data.restrictionsJson);
-            if (parsed && typeof parsed === 'object') {
-              onData(parsed);
-              return;
-            }
-          } catch (e) {
-            console.warn('Failed to parse synchronized studentRestrictions:', e);
-          }
+  return subscribeToSharedSettings((settingsMap) => {
+    const data = settingsMap[STUDENT_RESTRICTIONS_DOC];
+    if (data && data.restrictionsJson) {
+      try {
+        const parsed = JSON.parse(data.restrictionsJson);
+        if (parsed && typeof parsed === 'object') {
+          onData(parsed);
+          return;
         }
+      } catch (e) {
+        console.warn('Failed to parse synchronized studentRestrictions:', e);
       }
-      onData(null);
-    },
-    (err) => {
-      console.warn('Student restrictions subscription notice:', err?.message || err);
-      onError?.(err);
     }
-  );
+    onData(null);
+  });
 }
 
 /**
@@ -650,5 +681,68 @@ export async function saveStudentRestrictionsToFirebase(config: StudentRestricti
     handleFirestoreError(error, OperationType.WRITE, `${SETTINGS_COLLECTION}/${STUDENT_RESTRICTIONS_DOC}`);
   }
 }
+
+const DASHBOARD_BACKGROUND_DOC = 'dashboardBackground';
+
+/**
+ * Subscribe to synchronized Dashboard Background configuration.
+ */
+export function subscribeToDashboardBackground(
+  onData: (config: DashboardBackgroundConfig | null) => void,
+  _onError?: (error: Error) => void
+): () => void {
+  return subscribeToSharedSettings((settingsMap) => {
+    const data = settingsMap[DASHBOARD_BACKGROUND_DOC];
+    if (data && data.backgroundJson) {
+      try {
+        const parsed = JSON.parse(data.backgroundJson);
+        if (parsed && typeof parsed === 'object') {
+          onData(parsed);
+          return;
+        }
+      } catch (e) {
+        console.warn('Failed to parse synchronized dashboardBackground:', e);
+      }
+    }
+    onData(null);
+  });
+}
+
+/**
+ * Save updated Dashboard Background settings to Firebase Firestore (truncating history if needed to stay under 900KB).
+ */
+export async function saveDashboardBackgroundToFirebase(config: DashboardBackgroundConfig): Promise<void> {
+  const docRef = doc(db, SETTINGS_COLLECTION, DASHBOARD_BACKGROUND_DOC);
+  try {
+    let payloadConfig = { ...config };
+    let serialized = JSON.stringify(payloadConfig);
+    if (serialized.length > 850000 && Array.isArray(payloadConfig.savedCustomImages)) {
+      payloadConfig = {
+        ...payloadConfig,
+        savedCustomImages: payloadConfig.savedCustomImages.slice(0, 2),
+      };
+      serialized = JSON.stringify(payloadConfig);
+    }
+    if (serialized.length > 850000) {
+      payloadConfig = {
+        ...payloadConfig,
+        savedCustomImages: [],
+      };
+      serialized = JSON.stringify(payloadConfig);
+    }
+
+    await setDoc(
+      docRef,
+      {
+        backgroundJson: serialized,
+        updatedAt: new Date().toISOString(),
+      },
+      { merge: true }
+    );
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `${SETTINGS_COLLECTION}/${DASHBOARD_BACKGROUND_DOC}`);
+  }
+}
+
 
 

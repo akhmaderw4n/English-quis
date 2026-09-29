@@ -4,8 +4,9 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { ViewState, StudentInfo, QuizSubmission, ViolationLockSession, QuizViolationRecord, Question, ProcedureTextConfig, StudentRestrictionConfig } from './types';
+import { ViewState, StudentInfo, QuizSubmission, ViolationLockSession, QuizViolationRecord, Question, ProcedureTextConfig, StudentRestrictionConfig, DashboardBackgroundConfig } from './types';
 import { QUIZ_QUESTIONS, QUIZ_METADATA, INITIAL_STUDENT_SUBMISSIONS, INITIAL_PROCEDURE_TEXT_CONFIG, INITIAL_STUDENT_RESTRICTION_CONFIG, INITIAL_REGISTERED_STUDENTS, getStudentAttemptStatus, normalizeStudentName, normalizeStudentNumber } from './data/quizData';
+import { INITIAL_DASHBOARD_BACKGROUND_CONFIG, resolveActiveBackgroundImageUrl } from './utils/dashboardBackground';
 import { Navbar } from './components/Navbar';
 import { Footer } from './components/Footer';
 import { StartScreen } from './components/StartScreen';
@@ -37,6 +38,8 @@ import {
   resetProcedureTextInFirebase,
   subscribeToStudentRestrictions,
   saveStudentRestrictionsToFirebase,
+  subscribeToDashboardBackground,
+  saveDashboardBackgroundToFirebase,
   testConnection
 } from './services/firebase';
 
@@ -47,6 +50,7 @@ const STORAGE_KEY_QUESTIONS = 'en_nusantara_quiz_questions_v1';
 const STORAGE_KEY_PROCEDURE_TEXT = 'en_nusantara_learning_material_v2';
 const STORAGE_KEY_STUDY_VIEWED_USERS = 'en_nusantara_study_viewed_users_v2';
 const STORAGE_KEY_STUDENT_RESTRICTIONS = 'en_nusantara_student_restrictions_v1';
+const STORAGE_KEY_DASHBOARD_BACKGROUND = 'en_nusantara_dashboard_bg_v1';
 
 export default function App() {
   const [currentView, setCurrentView] = useState<ViewState>('start');
@@ -109,6 +113,18 @@ export default function App() {
       }
     } catch {}
     return INITIAL_STUDENT_RESTRICTION_CONFIG;
+  });
+  const [dashboardBackground, setDashboardBackground] = useState<DashboardBackgroundConfig>(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY_DASHBOARD_BACKGROUND);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') {
+          return { ...INITIAL_DASHBOARD_BACKGROUND_CONFIG, ...parsed };
+        }
+      }
+    } catch {}
+    return INITIAL_DASHBOARD_BACKGROUND_CONFIG;
   });
   const [draftStudent, setDraftStudent] = useState<StudentInfo>({
     name: '',
@@ -301,6 +317,27 @@ export default function App() {
       }
     });
 
+    const unsubscribeBackground = subscribeToDashboardBackground((cloudBg) => {
+      if (cloudBg) {
+        setDashboardBackground((prev) => {
+          // Preserve full local savedCustomImages if cloud had truncated history
+          const mergedSaved =
+            Array.isArray(cloudBg.savedCustomImages) && cloudBg.savedCustomImages.length >= (prev.savedCustomImages?.length || 0)
+              ? cloudBg.savedCustomImages
+              : prev.savedCustomImages || cloudBg.savedCustomImages || [];
+          const merged = {
+            ...INITIAL_DASHBOARD_BACKGROUND_CONFIG,
+            ...cloudBg,
+            savedCustomImages: mergedSaved,
+          };
+          try {
+            localStorage.setItem(STORAGE_KEY_DASHBOARD_BACKGROUND, JSON.stringify(merged));
+          } catch {}
+          return merged;
+        });
+      }
+    });
+
     return () => {
       unsubscribeSubmissions();
       unsubscribePin();
@@ -308,6 +345,7 @@ export default function App() {
       unsubscribeViolations();
       unsubscribeProcedureText();
       unsubscribeRestrictions();
+      unsubscribeBackground();
     };
   }, []);
 
@@ -383,6 +421,19 @@ export default function App() {
       await saveStudentRestrictionsToFirebase(newConfig);
     } catch (err) {
       console.warn('Notice: Could not sync student restrictions to Firestore:', err);
+    }
+  };
+
+  // Update dashboard background in memory, local storage, and Firestore
+  const handleUpdateDashboardBackground = async (newConfig: DashboardBackgroundConfig) => {
+    setDashboardBackground(newConfig);
+    try {
+      localStorage.setItem(STORAGE_KEY_DASHBOARD_BACKGROUND, JSON.stringify(newConfig));
+    } catch {}
+    try {
+      await saveDashboardBackgroundToFirebase(newConfig);
+    } catch (err) {
+      console.warn('Notice: Could not sync dashboard background to Firestore:', err);
     }
   };
 
@@ -770,10 +821,59 @@ export default function App() {
     }
   };
 
+  const activeBgImageUrl = resolveActiveBackgroundImageUrl(dashboardBackground);
+  const shouldShowCustomBg =
+    Boolean(activeBgImageUrl) &&
+    (dashboardBackground.applyScope === 'all' ||
+      (dashboardBackground.applyScope === 'dashboard_only' && currentView === 'dashboard') ||
+      (dashboardBackground.applyScope === 'student_only' && currentView !== 'dashboard'));
+
+  const getOverlayRgba = () => {
+    const alpha = Math.max(0, Math.min(0.95, (dashboardBackground.overlayOpacity ?? 60) / 100));
+    if (dashboardBackground.overlayColor === 'dark') {
+      return `rgba(15, 23, 42, ${alpha})`;
+    }
+    if (dashboardBackground.overlayColor === 'warm') {
+      return `rgba(255, 251, 235, ${alpha})`;
+    }
+    return `rgba(255, 255, 255, ${alpha})`;
+  };
+
   return (
-    <div className="min-h-screen flex flex-col bg-linear-to-b from-amber-50/40 via-white to-orange-50/20 text-slate-800">
+    <div className="min-h-screen flex flex-col bg-linear-to-b from-amber-50/40 via-white to-orange-50/20 text-slate-800 relative">
+      {/* Dynamic Customizable Dashboard / App Background Layer */}
+      {shouldShowCustomBg && (
+        <div className="fixed inset-0 z-0 pointer-events-none overflow-hidden no-print">
+          <div
+            className="absolute inset-0 transition-all duration-300"
+            style={{
+              backgroundImage: `url("${activeBgImageUrl}")`,
+              backgroundSize:
+                dashboardBackground.bgSize === 'repeat'
+                  ? '320px auto'
+                  : dashboardBackground.bgSize === 'contain'
+                  ? 'contain'
+                  : 'cover',
+              backgroundRepeat: dashboardBackground.bgSize === 'repeat' ? 'repeat' : 'no-repeat',
+              backgroundPosition: 'center',
+              filter:
+                (dashboardBackground.blurPx || 0) > 0
+                  ? `blur(${dashboardBackground.blurPx}px)`
+                  : 'none',
+              transform: (dashboardBackground.blurPx || 0) > 0 ? 'scale(1.04)' : 'scale(1)',
+            }}
+          />
+          <div
+            className="absolute inset-0 transition-all duration-300"
+            style={{
+              backgroundColor: getOverlayRgba(),
+            }}
+          />
+        </div>
+      )}
+
       {/* Navigation (Always visible) */}
-      <div className="no-print">
+      <div className="no-print relative z-10">
         <Navbar
           currentView={currentView}
           onNavigate={(view) => {
@@ -795,7 +895,7 @@ export default function App() {
       </div>
 
       {/* Main View Area */}
-      <main className="flex-1">
+      <main className="flex-1 relative z-10">
         {currentView === 'start' && (
           <StartScreen
             onStartQuiz={handleStartQuiz}
@@ -871,6 +971,8 @@ export default function App() {
             studentRestrictions={studentRestrictions}
             onUpdateStudentRestrictions={handleUpdateStudentRestrictions}
             onResetStudyModuleViews={handleResetStudyModuleViews}
+            dashboardBackground={dashboardBackground}
+            onUpdateDashboardBackground={handleUpdateDashboardBackground}
             currentPin={teacherPin}
             onChangePin={handleChangePin}
             onClearSubmissions={handleClearSubmissions}
@@ -902,7 +1004,7 @@ export default function App() {
       )}
 
       {/* Footer with Mandatory Branding */}
-      <div className="no-print">
+      <div className="no-print relative z-10">
         <Footer />
       </div>
     </div>

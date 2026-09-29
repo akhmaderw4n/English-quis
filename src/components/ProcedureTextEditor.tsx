@@ -953,7 +953,7 @@ export const ProcedureTextEditor: React.FC<ProcedureTextEditorProps> = ({
                 Ringkasan Materi &amp; Ciri Kebahasaan (Language Features)
               </h3>
               <p className="text-xs text-slate-500 mt-0.5">
-                Konsep inti materi Procedure Text yang ditampilkan kepada peserta didik sebagai panduan belajar.
+                Konsep inti materi Descriptive text yang ditampilkan kepada peserta didik sebagai panduan belajar.
               </p>
             </div>
             <button
@@ -970,14 +970,14 @@ export const ProcedureTextEditor: React.FC<ProcedureTextEditorProps> = ({
           {/* Definition */}
           <div className="space-y-1.5">
             <label className="text-xs font-bold text-slate-800 uppercase tracking-wider block">
-              1. Definition (Pengertian Procedure Text)
+              1. Definition (Apa itu Descriptive text)
             </label>
             <textarea
               rows={2}
               value={theoryDefinition}
               onChange={(e) => setTheoryDefinition(e.target.value)}
               className="w-full p-3 text-xs sm:text-sm rounded-xl border border-slate-200 focus:border-amber-500 focus:ring-1 focus:ring-amber-500 outline-none"
-              placeholder="Procedure text is a text that gives instructions..."
+              placeholder="Descriptive text is a text that describes a person, place, or thing specifically..."
             />
           </div>
 
@@ -1144,7 +1144,7 @@ export const ProcedureTextEditor: React.FC<ProcedureTextEditorProps> = ({
           <div className="bg-white rounded-2xl p-5 border border-amber-200 shadow-2xs space-y-4">
             <h4 className="font-extrabold text-sm text-slate-900 flex items-center gap-2">
               <BookOpen className="w-4 h-4 text-amber-600" />
-              <span>Apa itu Procedure Text?</span>
+              <span>Apa itu Descriptive text</span>
             </h4>
             <p className="text-xs sm:text-sm text-slate-700 leading-relaxed font-medium bg-amber-50/60 p-3.5 rounded-xl border border-amber-100">
               {config.definition}

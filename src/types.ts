@@ -130,3 +130,25 @@ export interface StudentRestrictionConfig {
   updatedAt?: string;
 }
 
+export interface CustomBackgroundItem {
+  id: string;
+  name: string;
+  imageUrl: string;
+  createdAt: string;
+}
+
+export interface DashboardBackgroundConfig {
+  mode: 'default' | 'preset' | 'custom';
+  presetId: string;
+  customImageUrl: string;
+  savedCustomImages: CustomBackgroundItem[];
+  applyScope: 'all' | 'dashboard_only' | 'student_only';
+  applyToBanner: boolean;
+  overlayOpacity: number; // 0 to 90
+  overlayColor: 'light' | 'dark' | 'warm';
+  blurPx: number; // 0 to 16
+  bgSize: 'cover' | 'contain' | 'repeat';
+  updatedAt?: string;
+}
+
+

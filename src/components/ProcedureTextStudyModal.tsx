@@ -196,7 +196,11 @@ export const ProcedureTextStudyModal: React.FC<ProcedureTextStudyModalProps> = (
           <div className="p-4 sm:p-6 overflow-y-auto space-y-5">
             {/* Definition & Social Function */}
             <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 space-y-1.5">
-              <span className="text-xs font-bold text-amber-900 uppercase tracking-wider block">
+              <h4 className="font-extrabold text-sm text-amber-950 flex items-center gap-2">
+                <BookOpen className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>Apa itu Descriptive text</span>
+              </h4>
+              <span className="text-[11px] font-bold text-amber-800 uppercase tracking-wider block">
                 Pengertian Materi (Introducing Myself, Others &amp; Descriptive Text)
               </span>
               <p className="text-xs sm:text-sm font-semibold text-slate-800 leading-relaxed">

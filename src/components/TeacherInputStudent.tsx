@@ -20,7 +20,12 @@ import {
   ArrowRight
 } from 'lucide-react';
 import { QuizSubmission } from '../types';
-import { QUIZ_QUESTIONS, QUIZ_METADATA } from '../data/quizData';
+import {
+  QUIZ_QUESTIONS,
+  QUIZ_METADATA,
+  hasStudentSubmittedQuiz,
+  getSubmissionAssessmentStatus,
+} from '../data/quizData';
 import { playClickSound, playCorrectSound } from '../utils/audio';
 
 interface TeacherInputStudentProps {
@@ -50,7 +55,7 @@ export const TeacherInputStudent: React.FC<TeacherInputStudentProps> = ({
   const [singleClass, setSingleClass] = useState('7A');
   const [customClass, setCustomClass] = useState('');
   const [singleNumber, setSingleNumber] = useState('');
-  const [gradingMethod, setGradingMethod] = useState<'answers' | 'directScore'>('answers');
+  const [gradingMethod, setGradingMethod] = useState<'unsubmitted' | 'answers' | 'directScore'>('directScore');
   
   // Answers per question (1-10)
   const [studentAnswers, setStudentAnswers] = useState<Record<number, 'A' | 'B' | 'C' | 'D'>>(() => {
@@ -61,17 +66,28 @@ export const TeacherInputStudent: React.FC<TeacherInputStudentProps> = ({
     return initial;
   });
 
-  // Direct score input
-  const [directScoreInput, setDirectScoreInput] = useState<number>(80);
+  // Direct score input (string so empty string "" means Belum Mengerjakan, NOT automatic 0!)
+  const [directScoreInput, setDirectScoreInput] = useState<string>('');
   const [singleDurationMinutes, setSingleDurationMinutes] = useState<number>(8);
 
   // Single Entry Calculated Score
   const calculatedStats = React.useMemo(() => {
+    if (gradingMethod === 'unsubmitted') {
+      return { hasSubmitted: false, score: 0, correctCount: 0, wrongCount: 0 };
+    }
     if (gradingMethod === 'directScore') {
-      const score = Math.max(0, Math.min(100, Number(directScoreInput) || 0));
+      const trimmed = String(directScoreInput ?? '').trim();
+      if (trimmed === '') {
+        return { hasSubmitted: false, score: 0, correctCount: 0, wrongCount: 0 };
+      }
+      const parsed = Number(trimmed);
+      if (Number.isNaN(parsed)) {
+        return { hasSubmitted: false, score: 0, correctCount: 0, wrongCount: 0 };
+      }
+      const score = Math.max(0, Math.min(100, parsed));
       const correctCount = Math.round(score / QUIZ_METADATA.pointsPerQuestion);
       const wrongCount = QUIZ_QUESTIONS.length - correctCount;
-      return { score, correctCount, wrongCount };
+      return { hasSubmitted: true, score, correctCount, wrongCount };
     } else {
       let correct = 0;
       QUIZ_QUESTIONS.forEach(q => {
@@ -81,7 +97,7 @@ export const TeacherInputStudent: React.FC<TeacherInputStudentProps> = ({
       });
       const score = correct * QUIZ_METADATA.pointsPerQuestion;
       const wrong = QUIZ_QUESTIONS.length - correct;
-      return { score, correctCount: correct, wrongCount: wrong };
+      return { hasSubmitted: true, score, correctCount: correct, wrongCount: wrong };
     }
   }, [gradingMethod, directScoreInput, studentAnswers]);
 
@@ -124,7 +140,9 @@ export const TeacherInputStudent: React.FC<TeacherInputStudentProps> = ({
 
     // Construct final answers
     let finalAnswersMap: Record<number, 'A' | 'B' | 'C' | 'D'> = {};
-    if (gradingMethod === 'answers') {
+    if (!calculatedStats.hasSubmitted) {
+      finalAnswersMap = {};
+    } else if (gradingMethod === 'answers') {
       finalAnswersMap = { ...studentAnswers };
     } else {
       // Synthesize realistic answers matching the score
@@ -145,18 +163,23 @@ export const TeacherInputStudent: React.FC<TeacherInputStudentProps> = ({
       studentName: singleName.trim(),
       studentClass: finalClass,
       studentNumber: finalNumber.padStart(2, '0'),
-      score: calculatedStats.score,
+      score: calculatedStats.hasSubmitted ? calculatedStats.score : 0,
       totalQuestions: QUIZ_QUESTIONS.length,
-      correctCount: calculatedStats.correctCount,
-      wrongCount: calculatedStats.wrongCount,
+      correctCount: calculatedStats.hasSubmitted ? calculatedStats.correctCount : 0,
+      wrongCount: calculatedStats.hasSubmitted ? calculatedStats.wrongCount : 0,
       answers: finalAnswersMap,
-      timeSpentSeconds: Math.max(60, (singleDurationMinutes || 5) * 60),
+      timeSpentSeconds: calculatedStats.hasSubmitted ? Math.max(60, (singleDurationMinutes || 5) * 60) : 0,
       submittedAt: new Date().toISOString(),
+      hasSubmitted: calculatedStats.hasSubmitted,
     };
 
     onAddSubmission(newSubmission);
     playCorrectSound();
-    setSuccessMessage(`Data siswa "${singleName.trim()}" (Kelas ${finalClass} - No. ${finalNumber}) dengan nilai ${calculatedStats.score} berhasil disimpan!`);
+    setSuccessMessage(
+      calculatedStats.hasSubmitted
+        ? `Data siswa "${singleName.trim()}" (Kelas ${finalClass} - No. ${finalNumber}) dengan nilai ${calculatedStats.score} berhasil disimpan!`
+        : `Data siswa "${singleName.trim()}" (Kelas ${finalClass} - No. ${finalNumber}) berhasil disimpan dengan status Belum Mengerjakan (Nilai Akhir dikosongkan)!`
+    );
 
     // Reset some fields for next student
     setSingleName('');
@@ -170,19 +193,19 @@ export const TeacherInputStudent: React.FC<TeacherInputStudentProps> = ({
     id: string;
     studentNumber: string;
     studentName: string;
-    score: number;
+    score: string; // Empty string '' means Belum Mengerjakan (do not force 0!)
   }
 
   const [batchClass, setBatchClass] = useState('7B');
   const [batchRows, setBatchRows] = useState<BatchRow[]>([
-    { id: '1', studentNumber: '01', studentName: '', score: 80 },
-    { id: '2', studentNumber: '02', studentName: '', score: 85 },
-    { id: '3', studentNumber: '03', studentName: '', score: 90 },
-    { id: '4', studentNumber: '04', studentName: '', score: 75 },
-    { id: '5', studentNumber: '05', studentName: '', score: 70 },
+    { id: '1', studentNumber: '01', studentName: '', score: '' },
+    { id: '2', studentNumber: '02', studentName: '', score: '' },
+    { id: '3', studentNumber: '03', studentName: '', score: '' },
+    { id: '4', studentNumber: '04', studentName: '', score: '' },
+    { id: '5', studentNumber: '05', studentName: '', score: '' },
   ]);
 
-  const handleUpdateBatchRow = (id: string, field: keyof BatchRow, value: any) => {
+  const handleUpdateBatchRow = (id: string, field: keyof BatchRow, value: string) => {
     setBatchRows(prev => prev.map(r => r.id === id ? { ...r, [field]: value } : r));
   };
 
@@ -190,7 +213,7 @@ export const TeacherInputStudent: React.FC<TeacherInputStudentProps> = ({
     playClickSound();
     setBatchRows(prev => {
       const nextNum = String(prev.length + 1).padStart(2, '0');
-      return [...prev, { id: String(Date.now()), studentNumber: nextNum, studentName: '', score: 80 }];
+      return [...prev, { id: String(Date.now()), studentNumber: nextNum, studentName: '', score: '' }];
     });
   };
 
@@ -207,19 +230,23 @@ export const TeacherInputStudent: React.FC<TeacherInputStudentProps> = ({
     }
 
     const newSubmissions: QuizSubmission[] = validRows.map((r, idx) => {
-      const score = Math.max(0, Math.min(100, Number(r.score) || 0));
-      const correctCount = Math.round(score / QUIZ_METADATA.pointsPerQuestion);
-      const wrongCount = QUIZ_QUESTIONS.length - correctCount;
+      const rawScoreStr = String(r.score ?? '').trim();
+      const hasScore = rawScoreStr !== '' && !Number.isNaN(Number(rawScoreStr));
+      const score = hasScore ? Math.max(0, Math.min(100, Number(rawScoreStr))) : 0;
+      const correctCount = hasScore ? Math.round(score / QUIZ_METADATA.pointsPerQuestion) : 0;
+      const wrongCount = hasScore ? QUIZ_QUESTIONS.length - correctCount : 0;
 
       const answersMap: Record<number, 'A' | 'B' | 'C' | 'D'> = {};
-      QUIZ_QUESTIONS.forEach((q, qIdx) => {
-        if (qIdx < correctCount) {
-          answersMap[q.id] = q.correctAnswer;
-        } else {
-          const wrongOption = q.options.find(o => o.key !== q.correctAnswer);
-          answersMap[q.id] = wrongOption ? wrongOption.key : 'A';
-        }
-      });
+      if (hasScore) {
+        QUIZ_QUESTIONS.forEach((q, qIdx) => {
+          if (qIdx < correctCount) {
+            answersMap[q.id] = q.correctAnswer;
+          } else {
+            const wrongOption = q.options.find(o => o.key !== q.correctAnswer);
+            answersMap[q.id] = wrongOption ? wrongOption.key : 'A';
+          }
+        });
+      }
 
       return {
         id: `sub-batch-${Date.now()}-${idx}`,
@@ -231,8 +258,9 @@ export const TeacherInputStudent: React.FC<TeacherInputStudentProps> = ({
         correctCount,
         wrongCount,
         answers: answersMap,
-        timeSpentSeconds: 300 + idx * 25,
+        timeSpentSeconds: hasScore ? 300 + idx * 25 : 0,
         submittedAt: new Date().toISOString(),
+        hasSubmitted: hasScore,
       };
     });
 
@@ -242,9 +270,9 @@ export const TeacherInputStudent: React.FC<TeacherInputStudentProps> = ({
 
     // Reset batch rows
     setBatchRows([
-      { id: '1', studentNumber: '01', studentName: '', score: 80 },
-      { id: '2', studentNumber: '02', studentName: '', score: 85 },
-      { id: '3', studentNumber: '03', studentName: '', score: 90 },
+      { id: '1', studentNumber: '01', studentName: '', score: '' },
+      { id: '2', studentNumber: '02', studentName: '', score: '' },
+      { id: '3', studentNumber: '03', studentName: '', score: '' },
     ]);
   };
 
@@ -256,8 +284,8 @@ export const TeacherInputStudent: React.FC<TeacherInputStudentProps> = ({
 `01, Raditya Pratama, 90
 02, Tiara Andini, 80
 03, Kevin Sanjaya, 70
-04, Alisha Zahra, 100
-05, Dimas Anggara, 85`
+04, Alisha Zahra
+05, Dimas Anggara`
   );
   const [parsedPreview, setParsedPreview] = useState<QuizSubmission[]>([]);
 
@@ -269,20 +297,21 @@ export const TeacherInputStudent: React.FC<TeacherInputStudentProps> = ({
     lines.forEach((line, idx) => {
       // Split by tab, comma, or semicolon
       const parts = line.split(/[,\t;]+/).map(p => p.trim());
-      if (parts.length >= 2) {
+      if (parts.length >= 1) {
         let noAbsen = '';
         let nama = '';
-        let nilaiStr = '80';
+        let nilaiStr = '';
 
         if (parts.length >= 3) {
           noAbsen = parts[0];
           nama = parts[1];
           nilaiStr = parts[2];
-        } else {
-          // Only 2 parts: check if part 1 is name and part 2 is score, or part 1 is number
+        } else if (parts.length === 2) {
+          // Only 2 parts: check if part 0 is roll number and part 1 is name, OR part 0 is name and part 1 is score
           if (!isNaN(Number(parts[0])) && isNaN(Number(parts[1]))) {
             noAbsen = parts[0];
             nama = parts[1];
+            nilaiStr = ''; // No score provided -> Belum Mengerjakan!
           } else if (isNaN(Number(parts[0])) && !isNaN(Number(parts[1]))) {
             noAbsen = String(idx + 1);
             nama = parts[0];
@@ -290,22 +319,38 @@ export const TeacherInputStudent: React.FC<TeacherInputStudentProps> = ({
           } else {
             noAbsen = String(idx + 1);
             nama = parts[0];
+            nilaiStr = '';
           }
+        } else {
+          // Single part: check if it starts with "01. Nama Siswa"
+          const match = parts[0].match(/^(\d{1,3})[\.\-\)\s]+(.+)$/);
+          if (match) {
+            noAbsen = match[1];
+            nama = match[2].trim();
+          } else {
+            noAbsen = String(idx + 1);
+            nama = parts[0];
+          }
+          nilaiStr = '';
         }
 
-        const score = Math.max(0, Math.min(100, parseInt(nilaiStr, 10) || 80));
-        const correctCount = Math.round(score / QUIZ_METADATA.pointsPerQuestion);
-        const wrongCount = QUIZ_QUESTIONS.length - correctCount;
+        const cleanNilai = nilaiStr.replace('-', '').trim();
+        const hasScore = cleanNilai !== '' && !Number.isNaN(Number(cleanNilai)) && Number(cleanNilai) > 0;
+        const score = hasScore ? Math.max(0, Math.min(100, parseInt(cleanNilai, 10))) : 0;
+        const correctCount = hasScore ? Math.round(score / QUIZ_METADATA.pointsPerQuestion) : 0;
+        const wrongCount = hasScore ? QUIZ_QUESTIONS.length - correctCount : 0;
 
         const answersMap: Record<number, 'A' | 'B' | 'C' | 'D'> = {};
-        QUIZ_QUESTIONS.forEach((q, qIdx) => {
-          if (qIdx < correctCount) {
-            answersMap[q.id] = q.correctAnswer;
-          } else {
-            const wrongOption = q.options.find(o => o.key !== q.correctAnswer);
-            answersMap[q.id] = wrongOption ? wrongOption.key : 'A';
-          }
-        });
+        if (hasScore) {
+          QUIZ_QUESTIONS.forEach((q, qIdx) => {
+            if (qIdx < correctCount) {
+              answersMap[q.id] = q.correctAnswer;
+            } else {
+              const wrongOption = q.options.find(o => o.key !== q.correctAnswer);
+              answersMap[q.id] = wrongOption ? wrongOption.key : 'A';
+            }
+          });
+        }
 
         parsed.push({
           id: `sub-paste-${Date.now()}-${idx}`,
@@ -317,8 +362,9 @@ export const TeacherInputStudent: React.FC<TeacherInputStudentProps> = ({
           correctCount,
           wrongCount,
           answers: answersMap,
-          timeSpentSeconds: 320 + idx * 30,
+          timeSpentSeconds: hasScore ? 320 + idx * 30 : 0,
           submittedAt: new Date().toISOString(),
+          hasSubmitted: hasScore,
         });
       }
     });
@@ -546,11 +592,39 @@ export const TeacherInputStudent: React.FC<TeacherInputStudentProps> = ({
                   <span>Metode Pengisian Nilai Kuis</span>
                 </h4>
                 <p className="text-xs text-amber-800">
-                  Pilih apakah ingin mengisi rincian pilihan jawaban A-D per butir soal atau langsung memasukkan nilai akhir.
+                  Pilih apakah siswa belum mengerjakan (nilai dikosongkan), mengisi nilai langsung, atau rincian jawaban A–D.
                 </p>
               </div>
 
-              <div className="inline-flex p-1 bg-amber-200/50 rounded-xl">
+              <div className="inline-flex flex-wrap p-1 bg-amber-200/50 rounded-xl gap-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    playClickSound();
+                    setGradingMethod('unsubmitted');
+                  }}
+                  className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    gradingMethod === 'unsubmitted'
+                      ? 'bg-slate-800 text-white shadow-2xs'
+                      : 'text-amber-900 hover:bg-amber-200/60'
+                  }`}
+                >
+                  Belum Mengerjakan (Kosongkan Nilai)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    playClickSound();
+                    setGradingMethod('directScore');
+                  }}
+                  className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    gradingMethod === 'directScore'
+                      ? 'bg-amber-600 text-white shadow-2xs'
+                      : 'text-amber-900 hover:bg-amber-200/60'
+                  }`}
+                >
+                  Input Nilai Langsung
+                </button>
                 <button
                   type="button"
                   onClick={() => {
@@ -565,25 +639,22 @@ export const TeacherInputStudent: React.FC<TeacherInputStudentProps> = ({
                 >
                   Pilihan Jawaban (Soal 1–10)
                 </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    playClickSound();
-                    setGradingMethod('directScore');
-                  }}
-                  className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                    gradingMethod === 'directScore'
-                      ? 'bg-amber-600 text-white shadow-2xs'
-                      : 'text-amber-900 hover:bg-amber-200/60'
-                  }`}
-                >
-                  Input Nilai Langsung (0–100)
-                </button>
               </div>
             </div>
 
-            {/* Option A: Jawaban 1 - 10 */}
-            {gradingMethod === 'answers' ? (
+            {gradingMethod === 'unsubmitted' ? (
+              <div className="bg-white p-4 rounded-xl border border-slate-200 text-xs text-slate-600 flex items-center justify-between gap-4">
+                <div>
+                  <p className="font-bold text-slate-800 text-sm">Status: Belum Mengerjakan</p>
+                  <p className="mt-0.5 text-slate-500">
+                    Nilai akhir siswa akan <strong>dikosongkan</strong> (tidak diberi nilai 0 otomatis) dan status penilaian tercatat sebagai <strong>Belum Mengerjakan</strong> (bukan Remedial).
+                  </p>
+                </div>
+                <span className="px-3 py-1.5 rounded-lg bg-slate-100 text-slate-700 font-bold border border-slate-200 shrink-0">
+                  Nilai Akhir: Kosong
+                </span>
+              </div>
+            ) : gradingMethod === 'answers' ? (
               <div className="space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
                   <span className="font-semibold text-slate-700">
@@ -662,29 +733,43 @@ export const TeacherInputStudent: React.FC<TeacherInputStudentProps> = ({
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-center bg-white p-4 rounded-xl border border-amber-200">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">
-                    Nilai Kuis (0 - 100):
+                    Nilai Kuis (Kosongkan jika belum mengerjakan):
                   </label>
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-3 flex-wrap">
                     <input
                       type="number"
                       min="0"
                       max="100"
-                      step="10"
+                      placeholder="Kosong"
                       value={directScoreInput}
-                      onChange={(e) => setDirectScoreInput(Number(e.target.value))}
-                      className="w-32 px-4 py-2.5 rounded-xl border border-slate-300 font-black text-xl text-slate-900 focus:border-amber-500 outline-hidden"
+                      onChange={(e) => setDirectScoreInput(e.target.value)}
+                      className="w-32 px-4 py-2.5 rounded-xl border border-slate-300 font-black text-lg text-slate-900 focus:border-amber-500 outline-hidden placeholder:text-slate-400 placeholder:font-normal placeholder:text-sm"
                     />
                     <div className="flex items-center gap-1.5 flex-wrap">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          playClickSound();
+                          setDirectScoreInput('');
+                        }}
+                        className={`px-2 py-1 rounded-md text-xs font-bold ${
+                          directScoreInput.trim() === ''
+                            ? 'bg-slate-800 text-white'
+                            : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                        }`}
+                      >
+                        Kosongkan
+                      </button>
                       {[100, 90, 80, 75, 70, 60].map(val => (
                         <button
                           key={val}
                           type="button"
                           onClick={() => {
                             playClickSound();
-                            setDirectScoreInput(val);
+                            setDirectScoreInput(String(val));
                           }}
                           className={`px-2 py-1 rounded-md text-xs font-bold ${
-                            directScoreInput === val
+                            directScoreInput === String(val)
                               ? 'bg-amber-600 text-white'
                               : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
                           }`}
@@ -697,14 +782,27 @@ export const TeacherInputStudent: React.FC<TeacherInputStudentProps> = ({
                 </div>
 
                 <div className="text-xs text-slate-600 border-l border-slate-100 pl-4">
-                  <p>
-                    Setara dengan: <strong>{calculatedStats.correctCount} Soal Benar</strong> dari {QUIZ_QUESTIONS.length} Soal.
-                  </p>
-                  <p className="mt-1">
-                    Status: <strong className={calculatedStats.score >= QUIZ_METADATA.passingScore ? 'text-emerald-600' : 'text-rose-600'}>
-                      {calculatedStats.score >= QUIZ_METADATA.passingScore ? 'TUNTAS (Memenuhi KKM 75)' : 'REMEDIAL (Di bawah KKM 75)'}
-                    </strong>
-                  </p>
+                  {calculatedStats.hasSubmitted ? (
+                    <>
+                      <p>
+                        Setara dengan: <strong>{calculatedStats.correctCount} Soal Benar</strong> dari {QUIZ_QUESTIONS.length} Soal.
+                      </p>
+                      <p className="mt-1">
+                        Status: <strong className={calculatedStats.score >= QUIZ_METADATA.passingScore ? 'text-emerald-600' : 'text-rose-600'}>
+                          {calculatedStats.score >= QUIZ_METADATA.passingScore ? 'TUNTAS (Memenuhi KKM 75)' : 'REMEDIAL (Sudah Submit, Nilai < 75)'}
+                        </strong>
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <p>
+                        Nilai Akhir: <strong>Dikosongkan</strong> (Tidak diberi nilai 0 otomatis).
+                      </p>
+                      <p className="mt-1">
+                        Status: <strong className="text-slate-700">BELUM MENGERJAKAN</strong>
+                      </p>
+                    </>
+                  )}
                 </div>
               </div>
             )}
@@ -714,20 +812,32 @@ export const TeacherInputStudent: React.FC<TeacherInputStudentProps> = ({
               <div className="flex items-center gap-4">
                 <div>
                   <span className="text-slate-500 block text-[11px]">Nilai Akhir:</span>
-                  <span className="text-lg font-black text-slate-900">{calculatedStats.score} / 100</span>
+                  <span className="text-lg font-black text-slate-900">
+                    {calculatedStats.hasSubmitted ? `${calculatedStats.score} / 100` : '— (Kosong)'}
+                  </span>
                 </div>
                 <div>
                   <span className="text-slate-500 block text-[11px]">Benar / Salah:</span>
-                  <span className="font-bold text-slate-800">{calculatedStats.correctCount} Benar, {calculatedStats.wrongCount} Salah</span>
+                  <span className="font-bold text-slate-800">
+                    {calculatedStats.hasSubmitted
+                      ? `${calculatedStats.correctCount} Benar, ${calculatedStats.wrongCount} Salah`
+                      : 'Belum Mengerjakan'}
+                  </span>
                 </div>
               </div>
 
               <div className={`px-3 py-1 rounded-full font-bold ${
-                calculatedStats.score >= QUIZ_METADATA.passingScore
+                !calculatedStats.hasSubmitted
+                  ? 'bg-slate-100 text-slate-700 border border-slate-300'
+                  : calculatedStats.score >= QUIZ_METADATA.passingScore
                   ? 'bg-emerald-100 text-emerald-800'
                   : 'bg-rose-100 text-rose-800'
               }`}>
-                {calculatedStats.score >= QUIZ_METADATA.passingScore ? 'Lulus KKM (&ge;75)' : 'Perlu Remedial (<75)'}
+                {!calculatedStats.hasSubmitted
+                  ? 'Belum Mengerjakan'
+                  : calculatedStats.score >= QUIZ_METADATA.passingScore
+                  ? 'Tuntas (&ge;75)'
+                  : 'Remedial (<75)'}
               </div>
             </div>
           </div>
@@ -783,14 +893,17 @@ export const TeacherInputStudent: React.FC<TeacherInputStudentProps> = ({
                 <tr>
                   <th className="p-3 w-20 text-center">No. Absen</th>
                   <th className="p-3">Nama Siswa</th>
-                  <th className="p-3 w-32 text-center">Nilai (0–100)</th>
-                  <th className="p-3 w-32 text-center">Status</th>
+                  <th className="p-3 w-36 text-center">Nilai Akhir</th>
+                  <th className="p-3 w-40 text-center">Status Penilaian</th>
                   <th className="p-3 w-16 text-center">Aksi</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {batchRows.map((row, idx) => {
-                  const isPassed = row.score >= QUIZ_METADATA.passingScore;
+                  const rawScore = String(row.score ?? '').trim();
+                  const hasScore = rawScore !== '' && !Number.isNaN(Number(rawScore));
+                  const numScore = hasScore ? Number(rawScore) : null;
+                  const isPassed = hasScore && numScore !== null && numScore >= QUIZ_METADATA.passingScore;
                   return (
                     <tr key={row.id} className="hover:bg-slate-50/80">
                       <td className="p-2 text-center">
@@ -815,18 +928,26 @@ export const TeacherInputStudent: React.FC<TeacherInputStudentProps> = ({
                           type="number"
                           min="0"
                           max="100"
-                          step="5"
+                          placeholder="Kosong"
                           value={row.score}
-                          onChange={(e) => handleUpdateBatchRow(row.id, 'score', Number(e.target.value))}
-                          className="w-20 text-center py-1 rounded-lg border border-slate-300 font-bold focus:border-blue-500"
+                          onChange={(e) => handleUpdateBatchRow(row.id, 'score', e.target.value)}
+                          className="w-24 text-center py-1 px-2 rounded-lg border border-slate-300 font-bold focus:border-blue-500 placeholder:font-normal placeholder:text-slate-400"
                         />
                       </td>
                       <td className="p-2 text-center">
-                        <span className={`px-2 py-0.5 rounded-full font-bold text-[10px] ${
-                          isPassed ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
-                        }`}>
-                          {isPassed ? 'Tuntas' : 'Remedial'}
-                        </span>
+                        {!hasScore ? (
+                          <span className="px-2.5 py-0.5 rounded-full font-bold text-[10px] bg-slate-100 text-slate-700 border border-slate-300">
+                            Belum Mengerjakan
+                          </span>
+                        ) : isPassed ? (
+                          <span className="px-2.5 py-0.5 rounded-full font-bold text-[10px] bg-emerald-100 text-emerald-800">
+                            Tuntas
+                          </span>
+                        ) : (
+                          <span className="px-2.5 py-0.5 rounded-full font-bold text-[10px] bg-rose-100 text-rose-800">
+                            Remedial
+                          </span>
+                        )}
                       </td>
                       <td className="p-2 text-center">
                         <button
@@ -873,8 +994,7 @@ export const TeacherInputStudent: React.FC<TeacherInputStudentProps> = ({
               Panduan Format Salin-Tempel (Copy-Paste dari Excel / Catatan):
             </h4>
             <p className="text-xs text-emerald-800 leading-relaxed">
-              Ketik atau salin data dengan format tiap baris: <code className="bg-white px-1.5 py-0.5 rounded border border-emerald-300 font-mono">NoAbsen, Nama Siswa, Nilai</code>.
-              Pemisah dapat berupa koma (,), titik koma (;), atau tab dari Microsoft Excel / Google Sheets.
+              Ketik atau salin data dengan format tiap baris: <code className="bg-white px-1.5 py-0.5 rounded border border-emerald-300 font-mono">NoAbsen, Nama Siswa, Nilai</code> (atau cukup <code className="bg-white px-1.5 py-0.5 rounded border border-emerald-300 font-mono">NoAbsen, Nama Siswa</code> jika siswa belum mengerjakan agar nilai dikosongkan dan berstatus <strong>Belum Mengerjakan</strong>).
             </p>
           </div>
 
@@ -902,7 +1022,7 @@ export const TeacherInputStudent: React.FC<TeacherInputStudentProps> = ({
                 rows={6}
                 value={pasteText}
                 onChange={(e) => setPasteText(e.target.value)}
-                placeholder="01, Siti Aisyah, 90&#10;02, Budi Utomo, 80"
+                placeholder="01, Siti Aisyah, 90&#10;02, Budi Utomo"
                 className="w-full p-3 rounded-xl border border-slate-300 text-xs font-mono focus:border-emerald-500 focus:ring-1 focus:ring-emerald-200 outline-hidden bg-white"
               />
             </div>
@@ -944,28 +1064,40 @@ export const TeacherInputStudent: React.FC<TeacherInputStudentProps> = ({
                       <th className="p-2.5 text-center w-16">No Absen</th>
                       <th className="p-2.5">Nama Siswa</th>
                       <th className="p-2.5 text-center w-24">Kelas</th>
-                      <th className="p-2.5 text-center w-24">Nilai</th>
-                      <th className="p-2.5 text-center w-28">Status KKM</th>
+                      <th className="p-2.5 text-center w-24">Nilai Akhir</th>
+                      <th className="p-2.5 text-center w-36">Status Penilaian</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {parsedPreview.map((item, idx) => (
-                      <tr key={idx} className="hover:bg-slate-50">
-                        <td className="p-2 text-center font-bold text-slate-700">{item.studentNumber}</td>
-                        <td className="p-2 font-semibold text-slate-900">{item.studentName}</td>
-                        <td className="p-2 text-center text-slate-600">{item.studentClass}</td>
-                        <td className="p-2 text-center font-black text-slate-900">{item.score}</td>
-                        <td className="p-2 text-center">
-                          <span className={`px-2 py-0.5 rounded-full font-bold text-[10px] ${
-                            item.score >= QUIZ_METADATA.passingScore 
-                              ? 'bg-emerald-100 text-emerald-800' 
-                              : 'bg-rose-100 text-rose-800'
-                          }`}>
-                            {item.score >= QUIZ_METADATA.passingScore ? 'Tuntas' : 'Remedial'}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
+                    {parsedPreview.map((item, idx) => {
+                      const status = getSubmissionAssessmentStatus(item, QUIZ_METADATA.passingScore);
+                      const isSubmitted = hasStudentSubmittedQuiz(item);
+                      return (
+                        <tr key={idx} className="hover:bg-slate-50">
+                          <td className="p-2 text-center font-bold text-slate-700">{item.studentNumber}</td>
+                          <td className="p-2 font-semibold text-slate-900">{item.studentName}</td>
+                          <td className="p-2 text-center text-slate-600">{item.studentClass}</td>
+                          <td className="p-2 text-center font-black text-slate-900">
+                            {isSubmitted ? item.score : ''}
+                          </td>
+                          <td className="p-2 text-center">
+                            <span className={`px-2 py-0.5 rounded-full font-bold text-[10px] ${
+                              status === 'TUNTAS'
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : status === 'REMEDIAL'
+                                ? 'bg-rose-100 text-rose-800'
+                                : 'bg-slate-100 text-slate-700 border border-slate-300'
+                            }`}>
+                              {status === 'TUNTAS'
+                                ? 'Tuntas'
+                                : status === 'REMEDIAL'
+                                ? 'Remedial'
+                                : 'Belum Mengerjakan'}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

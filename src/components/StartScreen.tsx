@@ -19,7 +19,14 @@ import {
   Smartphone
 } from 'lucide-react';
 import { StudentInfo, StudentRestrictionConfig, QuizSubmission } from '../types';
-import { QUIZ_METADATA, INITIAL_STUDENT_RESTRICTION_CONFIG, getStudentAttemptStatus } from '../data/quizData';
+import {
+  QUIZ_METADATA,
+  INITIAL_STUDENT_RESTRICTION_CONFIG,
+  getStudentAttemptStatus,
+  normalizeStudentName,
+  normalizeStudentClass,
+  normalizeStudentNumber,
+} from '../data/quizData';
 import { playClickSound } from '../utils/audio';
 
 interface StartScreenProps {
@@ -47,10 +54,52 @@ export const StartScreen: React.FC<StartScreenProps> = ({
   const [studentNumber, setStudentNumber] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
+  // Combine registeredStudents and teacher-input submissions so students from 7G/7H are recognized automatically
+  const allKnownRoster = React.useMemo(() => {
+    const map = new Map<string, { id: string; name: string; studentClass: string; studentNumber: string }>();
+    (restrictions.registeredStudents || []).forEach((r) => {
+      const n = normalizeStudentName(r.name);
+      if (n && !map.has(n)) {
+        map.set(n, {
+          id: r.id,
+          name: r.name.replace(/^\d{1,3}[\.\,\;\-\)\s\t]+/, '').trim(),
+          studentClass: normalizeStudentClass(r.studentClass) || '7A',
+          studentNumber: normalizeStudentNumber(r.studentNumber),
+        });
+      }
+    });
+    submissions.forEach((s) => {
+      const n = normalizeStudentName(s.studentName);
+      if (n && !map.has(n)) {
+        map.set(n, {
+          id: s.id,
+          name: s.studentName.replace(/^\d{1,3}[\.\,\;\-\)\s\t]+/, '').trim(),
+          studentClass: normalizeStudentClass(s.studentClass) || '7A',
+          studentNumber: normalizeStudentNumber(s.studentNumber),
+        });
+      }
+    });
+    return Array.from(map.values());
+  }, [restrictions.registeredStudents, submissions]);
+
   const handleNameChange = (val: string) => {
     setName(val);
     setErrorMsg('');
-    onStudentDraftChange?.({ name: val, studentClass, studentNumber });
+
+    const normVal = normalizeStudentName(val);
+    const matched = normVal ? allKnownRoster.find((r) => normalizeStudentName(r.name) === normVal) : undefined;
+
+    const nextClass = matched?.studentClass || studentClass;
+    const nextNum = matched?.studentNumber || studentNumber;
+
+    if (matched?.studentClass && matched.studentClass !== studentClass) {
+      setStudentClass(matched.studentClass);
+    }
+    if (matched?.studentNumber && !studentNumber) {
+      setStudentNumber(matched.studentNumber);
+    }
+
+    onStudentDraftChange?.({ name: val, studentClass: nextClass, studentNumber: nextNum });
   };
 
   const handleClassChange = (val: string) => {
@@ -71,13 +120,14 @@ export const StartScreen: React.FC<StartScreenProps> = ({
     restrictions
   );
 
-  // Registered students in the currently selected class for quick autocomplete
+  // Registered students in the currently selected class (or all classes) for quick autocomplete
   const classRegisteredStudents = React.useMemo(() => {
-    const list = restrictions.registeredStudents || [];
-    return list.filter(
-      (r) => (r.studentClass || '').trim().toUpperCase() === studentClass.trim().toUpperCase()
+    const cleanSelectedClass = normalizeStudentClass(studentClass);
+    const inClass = allKnownRoster.filter(
+      (r) => normalizeStudentClass(r.studentClass) === cleanSelectedClass
     );
-  }, [restrictions.registeredStudents, studentClass]);
+    return inClass.length > 0 ? inClass : allKnownRoster;
+  }, [allKnownRoster, studentClass]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();

@@ -29,7 +29,22 @@ export const INITIAL_STUDENT_RESTRICTION_CONFIG: StudentRestrictionConfig = {
 };
 
 export function normalizeStudentName(name: string | undefined | null): string {
-  return (name || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  return (name || '')
+    .trim()
+    .replace(/^\d{1,3}[\.\,\;\-\)\s\t]+/, '') // strip accidental leading roll number from bulk paste
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+export function normalizeStudentClass(cls: string | undefined | null): string {
+  const raw = (cls || '')
+    .trim()
+    .toUpperCase()
+    .replace(/^KELAS\s+/i, '')
+    .replace(/^VII([\s\-_]*)/i, '7')
+    .replace(/[\s\-_]+/g, '');
+  return raw;
 }
 
 export function normalizeStudentNumber(num: string | undefined | null): string {
@@ -39,15 +54,74 @@ export function normalizeStudentNumber(num: string | undefined | null): string {
   return !isNaN(parsed) ? String(parsed) : raw;
 }
 
+/**
+ * Returns true if a submission record was entered via the Teacher's "Input Siswa" menu
+ * (single/batch/paste) rather than an online exam session completed by the student.
+ */
+export function isTeacherManualRosterSubmission(sub: QuizSubmission | undefined | null): boolean {
+  if (!sub) return false;
+  const id = String(sub.id || '');
+  if (
+    id.startsWith('sub-manual-') ||
+    id.startsWith('sub-batch-') ||
+    id.startsWith('sub-paste-') ||
+    id.startsWith('sub-roster-') ||
+    id.startsWith('reg-unsub-')
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Returns true ONLY if the student has actually submitted/completed the quiz (or teacher explicitly inputted a non-zero grade).
+ * Returns false if the student has not taken the quiz yet (e.g. pre-registered or score left blank / 0 on roster entry).
+ */
+export function hasStudentSubmittedQuiz(sub: QuizSubmission | undefined | null): boolean {
+  if (!sub) return false;
+  if (sub.hasSubmitted === false) return false;
+  if (sub.hasSubmitted === true) return true;
+  if (sub.score === null || sub.score === undefined || Number.isNaN(Number(sub.score))) {
+    return false;
+  }
+  // If entered via teacher manual/batch/paste roster input with score 0, treat as not yet taken ("Belum Mengerjakan")
+  if (isTeacherManualRosterSubmission(sub) && Number(sub.score) === 0) {
+    return false;
+  }
+  const answerCount = sub.answers ? Object.keys(sub.answers).length : 0;
+  if (answerCount === 0 && Number(sub.score) === 0) {
+    return false;
+  }
+  return true;
+}
+
+export type SubmissionAssessmentStatus = 'TUNTAS' | 'REMEDIAL' | 'BELUM_MENGERJAKAN';
+
+/**
+ * Determines the official assessment status:
+ * - 'BELUM_MENGERJAKAN': Student has not submitted the quiz yet (do not give automatic 0, do not mark as Remedial).
+ * - 'REMEDIAL': Student HAS submitted the quiz, and score < 75 (passingScore).
+ * - 'TUNTAS': Student HAS submitted the quiz, and score >= 75 (passingScore).
+ */
+export function getSubmissionAssessmentStatus(
+  sub: QuizSubmission | undefined | null,
+  passingScore: number = 75
+): SubmissionAssessmentStatus {
+  if (!hasStudentSubmittedQuiz(sub)) {
+    return 'BELUM_MENGERJAKAN';
+  }
+  return Number(sub!.score) >= passingScore ? 'TUNTAS' : 'REMEDIAL';
+}
+
 export function buildNormalizedStudentKey(
   student: { name: string; studentClass: string; studentNumber: string },
-  lockByClassAndNumber: boolean = true
+  lockByClassAndNumber: boolean = false
 ): string {
-  const cleanClass = (student.studentClass || '').trim().toUpperCase();
+  const cleanClass = normalizeStudentClass(student.studentClass);
   const cleanNum = normalizeStudentNumber(student.studentNumber);
   const cleanName = normalizeStudentName(student.name);
   if (!cleanClass || (!cleanNum && !cleanName)) return '';
-  if (lockByClassAndNumber && cleanNum) {
+  if (lockByClassAndNumber && cleanNum && !cleanName) {
     return `${cleanClass}_${cleanNum}`;
   }
   return `${cleanClass}_${cleanNum}_${cleanName}`;
@@ -94,18 +168,18 @@ export function detectCrossClassDuplicateSubmissions(
 
   subsByName.forEach((subList, normName) => {
     const uniqueClasses = Array.from(
-      new Set(subList.map((s) => (s.studentClass || '').trim().toUpperCase()).filter(Boolean))
+      new Set(subList.map((s) => normalizeStudentClass(s.studentClass)).filter(Boolean))
     );
     const regEntry = regByName.get(normName);
 
     if (regEntry) {
-      const authClass = (regEntry.studentClass || '').trim().toUpperCase();
+      const authClass = normalizeStudentClass(regEntry.studentClass);
       const authNum = normalizeStudentNumber(regEntry.studentNumber);
       const invalidSubs = subList.filter(
-        (s) => (s.studentClass || '').trim().toUpperCase() !== authClass
+        (s) => normalizeStudentClass(s.studentClass) !== authClass
       );
       const validSubs = subList.filter(
-        (s) => (s.studentClass || '').trim().toUpperCase() === authClass
+        (s) => normalizeStudentClass(s.studentClass) === authClass
       );
 
       if (invalidSubs.length > 0) {
@@ -127,14 +201,14 @@ export function detectCrossClassDuplicateSubmissions(
         (a, b) => new Date(a.submittedAt).getTime() - new Date(b.submittedAt).getTime()
       );
       const firstRecord = sortedOldestFirst[0];
-      const authClass = (firstRecord.studentClass || '').trim().toUpperCase();
+      const authClass = normalizeStudentClass(firstRecord.studentClass);
       const authNum = normalizeStudentNumber(firstRecord.studentNumber);
 
       const validSubs = subList.filter(
-        (s) => (s.studentClass || '').trim().toUpperCase() === authClass
+        (s) => normalizeStudentClass(s.studentClass) === authClass
       );
       const invalidSubs = subList.filter(
-        (s) => (s.studentClass || '').trim().toUpperCase() !== authClass
+        (s) => normalizeStudentClass(s.studentClass) !== authClass
       );
 
       if (invalidSubs.length > 0) {
@@ -161,14 +235,14 @@ export function getStudentAttemptStatus(
   restrictions: StudentRestrictionConfig
 ) {
   const cleanName = normalizeStudentName(student?.name);
-  const cleanClass = (student?.studentClass || '').trim().toUpperCase();
+  const cleanClass = normalizeStudentClass(student?.studentClass);
   const cleanNum = normalizeStudentNumber(student?.studentNumber);
 
   const isIdentityComplete = Boolean(cleanName && cleanClass && cleanNum);
-  const lockBySeat = restrictions.lockByClassAndNumber !== false;
   const studentKey = isIdentityComplete
-    ? buildNormalizedStudentKey({ name: cleanName, studentClass: cleanClass, studentNumber: cleanNum }, lockBySeat)
+    ? buildNormalizedStudentKey({ name: cleanName, studentClass: cleanClass, studentNumber: cleanNum }, false)
     : '';
+  const seatKey = isIdentityComplete ? `${cleanClass}_${cleanNum}` : '';
   const legacyKey = isIdentityComplete ? `${cleanClass}_${cleanNum}_${cleanName}` : '';
 
   // 1. Check Master Database Siswa / Guru (registeredStudents) & Existing Submissions Database
@@ -194,31 +268,24 @@ export function getStudentAttemptStatus(
     if (registeredMatchesByName.length > 0) {
       // Student name exists in Master Database Siswa/Guru
       const matchInSelectedClass = registeredMatchesByName.find(
-        (r) => (r.studentClass || '').trim().toUpperCase() === cleanClass
+        (r) => normalizeStudentClass(r.studentClass) === cleanClass
       );
 
       if (!matchInSelectedClass) {
         // Name is registered in another class in Database Siswa/Guru -> REJECT!
         const officialRecord = registeredMatchesByName[0];
         isCrossClassConflict = true;
-        authoritativeClass = (officialRecord.studentClass || '').trim().toUpperCase();
+        authoritativeClass = normalizeStudentClass(officialRecord.studentClass);
         authoritativeNumber = normalizeStudentNumber(officialRecord.studentNumber);
         conflictMessage = `DITOLAK: Nama "${student?.name.trim()}" terdata di Database Siswa/Guru pada Kelas ${authoritativeClass}${
           authoritativeNumber ? ` (No. Absen ${authoritativeNumber})` : ''
         }. Nama user tidak boleh digunakan di 2 kelas berbeda! Kelas ${cleanClass} ditolak karena tidak terdata di database.`;
       } else {
-        // Class matches Database Siswa/Guru! Check attendance number if provided
+        // Class matches Database Siswa/Guru!
         const officialNum = normalizeStudentNumber(matchInSelectedClass.studentNumber);
-        if (cleanNum && officialNum && cleanNum !== officialNum) {
-          isDatabaseNumberMismatch = true;
-          authoritativeClass = cleanClass;
-          authoritativeNumber = officialNum;
-          conflictMessage = `DITOLAK: Nama "${matchInSelectedClass.name}" di Kelas ${cleanClass} terdata di Database Siswa/Guru dengan No. Absen ${officialNum} (bukan No. Absen ${cleanNum}).`;
-        } else {
-          isVerifiedInDatabase = true;
-          authoritativeClass = cleanClass;
-          authoritativeNumber = officialNum;
-        }
+        isVerifiedInDatabase = true;
+        authoritativeClass = cleanClass;
+        authoritativeNumber = officialNum || cleanNum;
       }
     } else if (allSubmissionsByName.length > 0) {
       // Name is not in registeredStudents master list, but ALREADY exists in Teacher's Submissions Database
@@ -226,7 +293,7 @@ export function getStudentAttemptStatus(
         (a, b) => new Date(a.submittedAt).getTime() - new Date(b.submittedAt).getTime()
       );
       const firstSub = sortedOldest[0];
-      const recordedClass = (firstSub.studentClass || '').trim().toUpperCase();
+      const recordedClass = normalizeStudentClass(firstSub.studentClass);
       const recordedNum = normalizeStudentNumber(firstSub.studentNumber);
 
       if (recordedClass && recordedClass !== cleanClass) {
@@ -237,25 +304,18 @@ export function getStudentAttemptStatus(
           recordedNum ? ` (No. Absen ${recordedNum})` : ''
         }. Satu nama user tidak boleh digunakan di 2 kelas! Kelas ${cleanClass} ditolak karena tidak terdata di database.`;
       } else {
+        isVerifiedInDatabase = true;
         authoritativeClass = recordedClass;
         authoritativeNumber = recordedNum;
       }
     } else if (restrictions.enforceRegisteredDatabase) {
-      // Strict database mode: reject any name not registered in registeredStudents
-      isUnregisteredInDb = true;
-      conflictMessage = `DITOLAK: Nama "${student?.name.trim()}" (Kelas ${cleanClass}) tidak terdata di Database Siswa/Guru. Silakan hubungi Guru untuk mendaftarkan nama Anda.`;
-    }
-
-    // Also check if the selected Class + Attendance Number belongs to a DIFFERENT registered student in Database Siswa/Guru
-    if (!isCrossClassConflict && !isDatabaseNumberMismatch && cleanNum) {
-      const seatOwner = registeredList.find(
-        (r) =>
-          (r.studentClass || '').trim().toUpperCase() === cleanClass &&
-          normalizeStudentNumber(r.studentNumber) === cleanNum
+      // Only enforce strict database rejection if the selected class actually has a registered roster
+      const classHasRegisteredRoster = registeredList.some(
+        (r) => normalizeStudentClass(r.studentClass) === cleanClass
       );
-      if (seatOwner && normalizeStudentName(seatOwner.name) !== cleanName) {
-        isSeatTakenInDb = true;
-        conflictMessage = `DITOLAK: Kelas ${cleanClass} No. Absen ${cleanNum} di Database Siswa/Guru terdaftar atas nama "${seatOwner.name}", bukan "${student?.name.trim()}".`;
+      if (classHasRegisteredRoster) {
+        isUnregisteredInDb = true;
+        conflictMessage = `DITOLAK: Nama "${student?.name.trim()}" (Kelas ${cleanClass}) tidak terdata di Database Siswa/Guru. Silakan hubungi Guru untuk mendaftarkan nama Anda.`;
       }
     }
   }
@@ -263,22 +323,21 @@ export function getStudentAttemptStatus(
   const isDatabaseRejected =
     isCrossClassConflict || isDatabaseNumberMismatch || isSeatTakenInDb || isUnregisteredInDb;
 
-  const matchingSubmissions = isIdentityComplete
+  // Separate actual online student exam submissions from teacher pre-input/roster entries
+  // so students whose data was pre-input by the teacher (and haven't taken the exam yet) can still start the quiz!
+  const allMatchingByIdentity = isIdentityComplete
     ? submissions.filter((sub) => {
-        const sClass = (sub.studentClass || '').trim().toUpperCase();
-        const sNum = normalizeStudentNumber(sub.studentNumber);
         const sName = normalizeStudentName(sub.studentName);
-
-        // Always match exact same student name across any class so quota can never be bypassed by switching class
-        if (sName === cleanName) return true;
-
-        if (sClass !== cleanClass) return false;
-        if (lockBySeat) {
-          return sNum === cleanNum;
-        }
-        return sName === cleanName && sNum === cleanNum;
+        return sName === cleanName;
       })
     : [];
+
+  const matchingSubmissions = allMatchingByIdentity.filter(
+    (sub) => hasStudentSubmittedQuiz(sub) && !isTeacherManualRosterSubmission(sub)
+  );
+  const teacherPreInputSubmissions = allMatchingByIdentity.filter(
+    (sub) => !hasStudentSubmittedQuiz(sub) || isTeacherManualRosterSubmission(sub)
+  );
 
   const attemptsUsed = matchingSubmissions.length;
   const bestScore = matchingSubmissions.reduce((max, s) => Math.max(max, s.score), 0);
@@ -287,6 +346,7 @@ export function getStudentAttemptStatus(
   const extraGrant =
     studentKey
       ? (restrictions.extraAttemptGrants?.[studentKey] ??
+         restrictions.extraAttemptGrants?.[seatKey] ??
          restrictions.extraAttemptGrants?.[legacyKey] ??
          0)
       : 0;
@@ -307,7 +367,10 @@ export function getStudentAttemptStatus(
     effectiveMaxAttempts > 0 ? Math.max(0, effectiveMaxAttempts - attemptsUsed) : Infinity;
 
   const isQuotaExhausted = effectiveMaxAttempts > 0 && attemptsUsed >= effectiveMaxAttempts;
-  const isClassAllowed = !cleanClass || restrictions.allowedClasses.includes(cleanClass);
+  const normalizedAllowedClasses = (restrictions.allowedClasses || ALL_CLASS_LIST).map((c) =>
+    normalizeStudentClass(c)
+  );
+  const isClassAllowed = !cleanClass || normalizedAllowedClasses.includes(cleanClass);
   const canStartQuiz =
     restrictions.isQuizOpen &&
     isClassAllowed &&
@@ -318,6 +381,7 @@ export function getStudentAttemptStatus(
     isIdentityComplete,
     studentKey,
     matchingSubmissions,
+    teacherPreInputSubmissions,
     attemptsUsed,
     bestScore,
     lastSubmission,

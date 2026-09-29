@@ -30,8 +30,10 @@ import {
   INITIAL_REGISTERED_STUDENTS,
   buildNormalizedStudentKey,
   normalizeStudentName,
+  normalizeStudentClass,
   normalizeStudentNumber,
-  detectCrossClassDuplicateSubmissions
+  detectCrossClassDuplicateSubmissions,
+  hasStudentSubmittedQuiz,
 } from '../data/quizData';
 import { playClickSound } from '../utils/audio';
 
@@ -213,7 +215,7 @@ export const StudentRestrictionPanel: React.FC<StudentRestrictionPanelProps> = (
         studentClass: string;
         studentNumber: string;
         attempts: number;
-        bestScore: number;
+        bestScore: number | null;
         lastSubmittedAt: string;
       }
     >();
@@ -225,6 +227,7 @@ export const StudentRestrictionPanel: React.FC<StudentRestrictionPanelProps> = (
         studentNumber: sub.studentNumber,
       });
       if (!key) return;
+      const isSubmitted = hasStudentSubmittedQuiz(sub);
       const existing = map.get(key);
       if (!existing) {
         map.set(key, {
@@ -232,13 +235,15 @@ export const StudentRestrictionPanel: React.FC<StudentRestrictionPanelProps> = (
           studentName: sub.studentName,
           studentClass: sub.studentClass,
           studentNumber: sub.studentNumber,
-          attempts: 1,
-          bestScore: sub.score,
-          lastSubmittedAt: sub.submittedAt,
+          attempts: isSubmitted ? 1 : 0,
+          bestScore: isSubmitted ? sub.score : null,
+          lastSubmittedAt: isSubmitted ? sub.submittedAt : '',
         });
-      } else {
+      } else if (isSubmitted) {
         existing.attempts += 1;
-        existing.bestScore = Math.max(existing.bestScore, sub.score);
+        existing.bestScore =
+          existing.bestScore === null ? sub.score : Math.max(existing.bestScore, sub.score);
+        existing.lastSubmittedAt = sub.submittedAt;
       }
     });
 
@@ -255,7 +260,7 @@ export const StudentRestrictionPanel: React.FC<StudentRestrictionPanelProps> = (
 
     return classFilter === 'ALL'
       ? arr
-      : arr.filter((item) => item.studentClass === classFilter);
+      : arr.filter((item) => normalizeStudentClass(item.studentClass) === normalizeStudentClass(classFilter));
   }, [submissions, classFilter]);
 
   const handleGrantExtraAttempt = (studentKey: string, studentName: string) => {
@@ -443,15 +448,19 @@ export const StudentRestrictionPanel: React.FC<StudentRestrictionPanelProps> = (
     let skippedConflict = 0;
 
     lines.forEach((line, idx) => {
-      // Support formats like "12. Galang Pratama", "12 - Galang Pratama", "12\tGalang Pratama", or "Galang Pratama"
-      const match = line.match(/^(\d{1,3})[\.\-\s\t]+(.+)$/);
+      // Support formats like "12. Galang Pratama", "12, Galang Pratama", "12 - Galang Pratama", "12\tGalang Pratama", or "Galang Pratama"
+      const match = line.match(/^(\d{1,3})[\.\,\;\)\-\s\t]+(.+)$/);
       const numStr = match ? normalizeStudentNumber(match[1]) : String(idx + 1);
-      const rawName = (match ? match[2] : line).trim();
+      // Also strip any trailing score column like ", 80" if pasted from Excel
+      const rawName = (match ? match[2] : line)
+        .replace(/[\,\;\t]+\s*\d{1,3}\s*$/, '')
+        .trim();
       const norm = normalizeStudentName(rawName);
       if (!norm) return;
 
+      const targetClassNorm = normalizeStudentClass(bulkPasteClass);
       const existing = mapByName.get(norm);
-      if (existing && existing.studentClass.toUpperCase() !== bulkPasteClass.toUpperCase()) {
+      if (existing && normalizeStudentClass(existing.studentClass) !== targetClassNorm) {
         // Skip because already registered in another class!
         skippedConflict += 1;
         return;
@@ -460,7 +469,7 @@ export const StudentRestrictionPanel: React.FC<StudentRestrictionPanelProps> = (
       mapByName.set(norm, {
         id: existing?.id || `reg-bulk-${Date.now()}-${idx}`,
         name: rawName,
-        studentClass: bulkPasteClass.toUpperCase(),
+        studentClass: targetClassNorm,
         studentNumber: numStr,
       });
       added += 1;
@@ -1406,6 +1415,8 @@ export const StudentRestrictionPanel: React.FC<StudentRestrictionPanelProps> = (
                   const remedial =
                     config.maxAttempts > 0 &&
                     config.allowRemedialIfBelowKKM &&
+                    st.attempts > 0 &&
+                    st.bestScore !== null &&
                     st.bestScore < QUIZ_METADATA.passingScore
                       ? 1
                       : 0;
@@ -1423,15 +1434,21 @@ export const StudentRestrictionPanel: React.FC<StudentRestrictionPanelProps> = (
                         Kelas {st.studentClass}
                       </td>
                       <td className="py-2.5 px-3">
-                        <span
-                          className={`font-extrabold ${
-                            st.bestScore >= QUIZ_METADATA.passingScore
-                              ? 'text-emerald-700'
-                              : 'text-amber-700'
-                          }`}
-                        >
-                          {st.bestScore} Poin
-                        </span>
+                        {st.bestScore !== null ? (
+                          <span
+                            className={`font-extrabold ${
+                              st.bestScore >= QUIZ_METADATA.passingScore
+                                ? 'text-emerald-700'
+                                : 'text-rose-700'
+                            }`}
+                          >
+                            {st.bestScore} Poin ({st.bestScore >= QUIZ_METADATA.passingScore ? 'Tuntas' : 'Remedial'})
+                          </span>
+                        ) : (
+                          <span className="text-slate-500 font-semibold">
+                            Belum Mengerjakan
+                          </span>
+                        )}
                       </td>
                       <td className="py-2.5 px-3 font-mono font-bold text-slate-800">
                         {st.attempts} / {maxAllowed === 0 ? '∞' : maxAllowed} Kali

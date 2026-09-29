@@ -4,7 +4,12 @@
  */
 
 import { StudentInfo, QuizSubmission, Question } from '../types';
-import { QUIZ_QUESTIONS, QUIZ_METADATA } from '../data/quizData';
+import {
+  QUIZ_QUESTIONS,
+  QUIZ_METADATA,
+  hasStudentSubmittedQuiz,
+  getSubmissionAssessmentStatus,
+} from '../data/quizData';
 
 export interface PrintDocumentOptions {
   paperSize?: 'A4' | 'F4' | 'Letter';
@@ -447,32 +452,66 @@ export function generateTeacherRecapHtml(
         .join('')
     : '';
 
+  const submittedCount = submissions.filter((s) => hasStudentSubmittedQuiz(s)).length;
+  const unsubmittedCount = Math.max(0, submissions.length - submittedCount);
+  const remedialCount = submissions.filter(
+    (s) => hasStudentSubmittedQuiz(s) && s.score < QUIZ_METADATA.passingScore
+  ).length;
+
   const tableRows = submissions
     .map((s, idx) => {
-      const isPass = s.score >= QUIZ_METADATA.passingScore;
+      const isSubmitted = hasStudentSubmittedQuiz(s);
+      const status = getSubmissionAssessmentStatus(s, QUIZ_METADATA.passingScore);
+      const isPass = status === 'TUNTAS';
       const durMins = Math.floor((s.timeSpentSeconds || 0) / 60);
       const durSecs = (s.timeSpentSeconds || 0) % 60;
-      const dateStr = s.submittedAt
-        ? new Date(s.submittedAt).toLocaleDateString('id-ID', {
-            day: '2-digit',
-            month: 'short',
-            year: 'numeric',
-          })
-        : '-';
+      const dateStr =
+        isSubmitted && s.submittedAt
+          ? new Date(s.submittedAt).toLocaleDateString('id-ID', {
+              day: '2-digit',
+              month: 'short',
+              year: 'numeric',
+            })
+          : '';
 
-      const statusColor = isGrayscale ? '#000000' : isPass ? '#14532d' : '#881337';
-      const statusBg = isGrayscale ? 'transparent' : isPass ? '#f0fdf4' : '#fff1f2';
+      const statusColor = isGrayscale
+        ? '#000000'
+        : !isSubmitted
+        ? '#334155'
+        : isPass
+        ? '#14532d'
+        : '#881337';
+      const statusBg = isGrayscale
+        ? 'transparent'
+        : !isSubmitted
+        ? '#f8fafc'
+        : isPass
+        ? '#f0fdf4'
+        : '#fff1f2';
 
       const questionCellsHtml = includeQuestionColumns
         ? activeQuestions
             .map((q) => {
-              const ans = s.answers?.[q.id] || '-';
+              const ans = isSubmitted ? s.answers?.[q.id] || '' : '';
               const isCorrect = ans === q.correctAnswer;
-              const cellColor = isGrayscale ? '#000000' : isCorrect ? '#15803d' : '#be123c';
+              const cellColor = isGrayscale
+                ? '#000000'
+                : !ans
+                ? '#94a3b8'
+                : isCorrect
+                ? '#15803d'
+                : '#be123c';
               return `<td style="padding: 4px 3px; text-align: center; font-size: 9pt; font-weight: bold; color: ${cellColor};">${ans}</td>`;
             })
             .join('')
         : '';
+
+      const statusLabel =
+        status === 'TUNTAS'
+          ? 'TUNTAS'
+          : status === 'REMEDIAL'
+          ? 'REMEDIAL'
+          : 'BELUM MENGERJAKAN';
 
       return `
       <tr style="page-break-inside: avoid;">
@@ -480,13 +519,13 @@ export function generateTeacherRecapHtml(
         <td style="padding: 5px 6px; text-align: center; font-weight: bold;">${s.studentNumber}</td>
         <td style="padding: 5px 8px; font-weight: bold; text-align: left;">${s.studentName}</td>
         <td style="padding: 5px 6px; text-align: center;">${s.studentClass}</td>
-        <td style="padding: 5px 6px; text-align: center;">${s.correctCount ?? 0}</td>
-        <td style="padding: 5px 6px; text-align: center;">${s.wrongCount ?? 0}</td>
-        <td style="padding: 5px 6px; text-align: center; font-size: 10.5pt; font-weight: bold; color: ${statusColor}; background: ${statusBg};">${s.score}</td>
+        <td style="padding: 5px 6px; text-align: center;">${isSubmitted ? (s.correctCount ?? 0) : ''}</td>
+        <td style="padding: 5px 6px; text-align: center;">${isSubmitted ? (s.wrongCount ?? 0) : ''}</td>
+        <td style="padding: 5px 6px; text-align: center; font-size: 10.5pt; font-weight: bold; color: ${statusColor}; background: ${isSubmitted ? statusBg : 'transparent'};">${isSubmitted ? s.score : ''}</td>
         <td style="padding: 5px 6px; text-align: center; font-weight: bold; color: ${statusColor}; background: ${statusBg};">
-          ${isPass ? 'TUNTAS' : 'BELUM TUNTAS'}
+          ${statusLabel}
         </td>
-        <td style="padding: 5px 6px; text-align: center;">${durMins}m ${durSecs}s</td>
+        <td style="padding: 5px 6px; text-align: center;">${isSubmitted ? `${durMins}m ${durSecs}s` : ''}</td>
         <td style="padding: 5px 6px; text-align: center;">${dateStr}</td>
         ${questionCellsHtml}
       </tr>
@@ -674,15 +713,15 @@ export function generateTeacherRecapHtml(
             </tr>
             <tr>
               <td class="lbl">Jumlah Peserta</td>
-              <td>: <strong>${stats.total} Siswa</strong></td>
+              <td>: <strong>${stats.total} Siswa</strong> (${submittedCount} Submit / ${unsubmittedCount} Belum Mengerjakan)</td>
             </tr>
             <tr>
               <td class="lbl">Rata-Rata Kelas</td>
-              <td>: <strong>${stats.avgScore}</strong> (Tertinggi: ${stats.highest} &bull; Terendah: ${stats.lowest})</td>
+              <td>: <strong>${submittedCount > 0 ? stats.avgScore : '-'}</strong> ${submittedCount > 0 ? `(Tertinggi: ${stats.highest} &bull; Terendah: ${stats.lowest})` : ''}</td>
             </tr>
             <tr>
-              <td class="lbl">Ketuntasan KKM</td>
-              <td>: <strong>${stats.passedPercent}% Tuntas</strong> (${stats.passedCount} Tuntas / ${Math.max(0, stats.total - stats.passedCount)} Remedial)</td>
+              <td class="lbl">Status Penilaian</td>
+              <td>: <strong>${stats.passedCount} Tuntas</strong> &bull; <strong>${remedialCount} Remedial</strong> &bull; <strong>${unsubmittedCount} Belum Mengerjakan</strong></td>
             </tr>
           </table>
         </td>
@@ -700,7 +739,7 @@ export function generateTeacherRecapHtml(
           <th style="width: 44px;">Benar</th>
           <th style="width: 44px;">Salah</th>
           <th style="width: 62px;">Nilai Akhir</th>
-          <th style="width: 98px;">Keterangan</th>
+          <th style="width: 112px;">Status</th>
           <th style="width: 64px;">Durasi</th>
           <th style="width: 82px;">Tanggal</th>
           ${questionHeadersHtml}
@@ -711,17 +750,17 @@ export function generateTeacherRecapHtml(
       </tbody>
       <tfoot>
         <tr class="summary-row">
-          <td colspan="6" style="text-align: right;">RATA-RATA NILAI KELAS :</td>
-          <td style="text-align: center; font-size: 10.5pt;">${stats.avgScore}</td>
+          <td colspan="6" style="text-align: right;">RATA-RATA NILAI (SISWA SUBMIT) :</td>
+          <td style="text-align: center; font-size: 10.5pt;">${submittedCount > 0 ? stats.avgScore : ''}</td>
           <td colspan="${3 + extraColCount}" style="text-align: left;">
-            Ketuntasan (KKM &ge; ${QUIZ_METADATA.passingScore}): ${stats.passedPercent}% (${stats.passedCount} dari ${stats.total} Siswa Tuntas)
+            Tuntas (&ge; ${QUIZ_METADATA.passingScore}): ${stats.passedCount} Siswa &bull; Remedial (&lt; ${QUIZ_METADATA.passingScore}): ${remedialCount} Siswa &bull; Belum Mengerjakan: ${unsubmittedCount} Siswa
           </td>
         </tr>
         <tr class="summary-row">
           <td colspan="6" style="text-align: right;">NILAI TERTINGGI / NILAI TERENDAH :</td>
-          <td style="text-align: center;">${stats.highest} / ${stats.lowest}</td>
+          <td style="text-align: center;">${submittedCount > 0 ? `${stats.highest} / ${stats.lowest}` : ''}</td>
           <td colspan="${3 + extraColCount}" style="text-align: left;">
-            Tuntas: ${stats.passedCount} Siswa &bull; Belum Tuntas (Remedial): ${Math.max(0, stats.total - stats.passedCount)} Siswa
+            Sudah Submit: ${submittedCount} Siswa &bull; Belum Mengerjakan: ${unsubmittedCount} Siswa
           </td>
         </tr>
       </tfoot>
@@ -821,32 +860,66 @@ export function generateTeacherRecapExcelWordStyleHtml(
         .join('')
     : '';
 
+  const submittedCount = submissions.filter((s) => hasStudentSubmittedQuiz(s)).length;
+  const unsubmittedCount = Math.max(0, submissions.length - submittedCount);
+  const remedialCount = submissions.filter(
+    (s) => hasStudentSubmittedQuiz(s) && s.score < QUIZ_METADATA.passingScore
+  ).length;
+
   const rowsHtml = submissions
     .map((s, idx) => {
-      const isPass = s.score >= QUIZ_METADATA.passingScore;
+      const isSubmitted = hasStudentSubmittedQuiz(s);
+      const status = getSubmissionAssessmentStatus(s, QUIZ_METADATA.passingScore);
+      const isPass = status === 'TUNTAS';
       const durMins = Math.floor((s.timeSpentSeconds || 0) / 60);
       const durSecs = (s.timeSpentSeconds || 0) % 60;
-      const dateStr = s.submittedAt
-        ? new Date(s.submittedAt).toLocaleDateString('id-ID', {
-            day: '2-digit',
-            month: 'short',
-            year: 'numeric',
-          })
-        : '-';
+      const dateStr =
+        isSubmitted && s.submittedAt
+          ? new Date(s.submittedAt).toLocaleDateString('id-ID', {
+              day: '2-digit',
+              month: 'short',
+              year: 'numeric',
+            })
+          : '';
 
-      const scoreColor = isGrayscale ? '#000000' : isPass ? '#14532d' : '#881337';
-      const scoreBg = isGrayscale ? '#ffffff' : isPass ? '#f0fdf4' : '#fff1f2';
+      const scoreColor = isGrayscale
+        ? '#000000'
+        : !isSubmitted
+        ? '#334155'
+        : isPass
+        ? '#14532d'
+        : '#881337';
+      const scoreBg = isGrayscale
+        ? '#ffffff'
+        : !isSubmitted
+        ? '#f8fafc'
+        : isPass
+        ? '#f0fdf4'
+        : '#fff1f2';
 
       const questionCellsHtml = includeQuestionColumns
         ? activeQuestions
             .map((q) => {
-              const ans = s.answers?.[q.id] || '-';
+              const ans = isSubmitted ? s.answers?.[q.id] || '' : '';
               const isCorrect = ans === q.correctAnswer;
-              const cColor = isGrayscale ? '#000000' : isCorrect ? '#15803d' : '#be123c';
+              const cColor = isGrayscale
+                ? '#000000'
+                : !ans
+                ? '#94a3b8'
+                : isCorrect
+                ? '#15803d'
+                : '#be123c';
               return `<td class="tbl-td center bold" style="color:${cColor};mso-number-format:'\\@';">${ans}</td>`;
             })
             .join('')
         : '';
+
+      const statusLabel =
+        status === 'TUNTAS'
+          ? 'TUNTAS'
+          : status === 'REMEDIAL'
+          ? 'REMEDIAL'
+          : 'BELUM MENGERJAKAN';
 
       return `
         <tr style="height: 20pt;">
@@ -854,11 +927,11 @@ export function generateTeacherRecapExcelWordStyleHtml(
           <td class="tbl-td center bold" style="mso-number-format:'\\@';">${s.studentNumber}</td>
           <td class="tbl-td left bold">${s.studentName}</td>
           <td class="tbl-td center" style="mso-number-format:'\\@';">${s.studentClass}</td>
-          <td class="tbl-td center">${s.correctCount ?? 0}</td>
-          <td class="tbl-td center">${s.wrongCount ?? 0}</td>
-          <td class="tbl-td center bold" style="color:${scoreColor};background-color:${scoreBg};font-size:11pt;">${s.score}</td>
-          <td class="tbl-td center bold" style="color:${scoreColor};background-color:${scoreBg};">${isPass ? 'TUNTAS' : 'BELUM TUNTAS'}</td>
-          <td class="tbl-td center" style="mso-number-format:'\\@';">${durMins}m ${durSecs}s</td>
+          <td class="tbl-td center">${isSubmitted ? (s.correctCount ?? 0) : ''}</td>
+          <td class="tbl-td center">${isSubmitted ? (s.wrongCount ?? 0) : ''}</td>
+          <td class="tbl-td center bold" style="color:${scoreColor};background-color:${isSubmitted ? scoreBg : '#ffffff'};font-size:11pt;">${isSubmitted ? s.score : ''}</td>
+          <td class="tbl-td center bold" style="color:${scoreColor};background-color:${scoreBg};">${statusLabel}</td>
+          <td class="tbl-td center" style="mso-number-format:'\\@';">${isSubmitted ? `${durMins}m ${durSecs}s` : ''}</td>
           <td class="tbl-td center" style="mso-number-format:'\\@';">${dateStr}</td>
           ${questionCellsHtml}
         </tr>
@@ -1056,7 +1129,7 @@ export function generateTeacherRecapExcelWordStyleHtml(
         <strong>Judul Evaluasi:</strong> ${QUIZ_METADATA.title}
       </td>
       <td colspan="${rightMetaSpan}" class="meta-cell">
-        <strong>Jumlah Peserta:</strong> ${stats.total} Siswa
+        <strong>Jumlah Peserta:</strong> ${stats.total} Siswa (${submittedCount} Submit / ${unsubmittedCount} Belum Mengerjakan)
       </td>
     </tr>
     <tr style="height: 17pt;">
@@ -1064,7 +1137,7 @@ export function generateTeacherRecapExcelWordStyleHtml(
         <strong>Kelas / Rombel:</strong> ${selectedClass === 'ALL' ? 'Semua Kelas (7A s.d. 7H)' : 'Kelas ' + selectedClass}
       </td>
       <td colspan="${rightMetaSpan}" class="meta-cell">
-        <strong>Rata-Rata Nilai Kelas:</strong> ${stats.avgScore} (Tertinggi: ${stats.highest} &bull; Terendah: ${stats.lowest})
+        <strong>Rata-Rata Nilai Kelas:</strong> ${submittedCount > 0 ? `${stats.avgScore} (Tertinggi: ${stats.highest} &bull; Terendah: ${stats.lowest})` : '-'}
       </td>
     </tr>
     <tr style="height: 17pt;">
@@ -1072,7 +1145,7 @@ export function generateTeacherRecapExcelWordStyleHtml(
         <strong>Guru Pengampu:</strong> ${QUIZ_METADATA.teacherName}
       </td>
       <td colspan="${rightMetaSpan}" class="meta-cell">
-        <strong>Ketuntasan (KKM &ge; ${QUIZ_METADATA.passingScore}):</strong> ${stats.passedPercent}% (${stats.passedCount} Tuntas / ${Math.max(0, stats.total - stats.passedCount)} Remedial)
+        <strong>Status Penilaian:</strong> ${stats.passedCount} Tuntas &bull; ${remedialCount} Remedial (&lt;${QUIZ_METADATA.passingScore}) &bull; ${unsubmittedCount} Belum Mengerjakan
       </td>
     </tr>
 
@@ -1090,7 +1163,7 @@ export function generateTeacherRecapExcelWordStyleHtml(
       <th class="tbl-th">Benar</th>
       <th class="tbl-th">Salah</th>
       <th class="tbl-th">Nilai Akhir</th>
-      <th class="tbl-th">Keterangan</th>
+      <th class="tbl-th">Status</th>
       <th class="tbl-th">Durasi</th>
       <th class="tbl-th">Tanggal</th>
       ${questionHeadersHtml}
@@ -1101,17 +1174,17 @@ export function generateTeacherRecapExcelWordStyleHtml(
 
     <!-- BARIS RINGKASAN / RATA-RATA DI BAWAH TABEL -->
     <tr style="height: 21pt;">
-      <td colspan="6" class="tbl-summary right">RATA-RATA NILAI KELAS :</td>
-      <td class="tbl-summary center" style="font-size: 11pt;">${stats.avgScore}</td>
+      <td colspan="6" class="tbl-summary right">RATA-RATA NILAI (SISWA SUBMIT) :</td>
+      <td class="tbl-summary center" style="font-size: 11pt;">${submittedCount > 0 ? stats.avgScore : ''}</td>
       <td colspan="${3 + extraCols}" class="tbl-summary left">
-        Ketuntasan (KKM &ge; ${QUIZ_METADATA.passingScore}): ${stats.passedPercent}% (${stats.passedCount} dari ${stats.total} Siswa Tuntas)
+        Tuntas (&ge; ${QUIZ_METADATA.passingScore}): ${stats.passedCount} Siswa &bull; Remedial (&lt; ${QUIZ_METADATA.passingScore}): ${remedialCount} Siswa &bull; Belum Mengerjakan: ${unsubmittedCount} Siswa
       </td>
     </tr>
     <tr style="height: 21pt;">
       <td colspan="6" class="tbl-summary right">NILAI TERTINGGI / NILAI TERENDAH :</td>
-      <td class="tbl-summary center" style="mso-number-format:'\\@';">${stats.highest} / ${stats.lowest}</td>
+      <td class="tbl-summary center" style="mso-number-format:'\\@';">${submittedCount > 0 ? `${stats.highest} / ${stats.lowest}` : ''}</td>
       <td colspan="${3 + extraCols}" class="tbl-summary left">
-        Tuntas: ${stats.passedCount} Siswa &bull; Belum Tuntas (Remedial): ${Math.max(0, stats.total - stats.passedCount)} Siswa
+        Sudah Submit: ${submittedCount} Siswa &bull; Belum Mengerjakan: ${unsubmittedCount} Siswa
       </td>
     </tr>
 
@@ -1217,10 +1290,19 @@ export function downloadTeacherRecapCsv(
     '\n';
 
   submissions.forEach((s, idx) => {
-    const status = s.score >= QUIZ_METADATA.passingScore ? 'TUNTAS' : 'BELUM TUNTAS';
-    const dateStr = new Date(s.submittedAt).toLocaleString('id-ID');
-    const questionAnswers = activeQuestions.map((q) => s.answers?.[q.id] || '-').join(',');
-    csvContent += `${idx + 1},"${s.studentNumber}","${s.studentName}","${s.studentClass}",${s.correctCount},${s.wrongCount},${s.score},"${status}",${s.timeSpentSeconds},"${dateStr}",${questionAnswers}\n`;
+    const isSubmitted = hasStudentSubmittedQuiz(s);
+    const assessmentStatus = getSubmissionAssessmentStatus(s, QUIZ_METADATA.passingScore);
+    const status =
+      assessmentStatus === 'TUNTAS'
+        ? 'TUNTAS'
+        : assessmentStatus === 'REMEDIAL'
+        ? 'REMEDIAL'
+        : 'BELUM MENGERJAKAN';
+    const dateStr = isSubmitted && s.submittedAt ? new Date(s.submittedAt).toLocaleString('id-ID') : '';
+    const questionAnswers = activeQuestions
+      .map((q) => (isSubmitted ? s.answers?.[q.id] || '' : ''))
+      .join(',');
+    csvContent += `${idx + 1},"${s.studentNumber}","${s.studentName}","${s.studentClass}",${isSubmitted ? s.correctCount : ''},${isSubmitted ? s.wrongCount : ''},${isSubmitted ? s.score : ''},"${status}",${isSubmitted ? s.timeSpentSeconds : ''},"${dateStr}",${questionAnswers}\n`;
   });
 
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });

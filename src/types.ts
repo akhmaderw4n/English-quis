@@ -36,6 +36,7 @@ export interface QuizSubmission {
   timeSpentSeconds: number;
   submittedAt: string; // ISO string
   violationsCount?: number; // Count of tab switch violations during test
+  hasSubmitted?: boolean; // True if student actually completed/submitted the quiz; false if only registered/not yet taken
 }
 
 export interface ViolationLockSession {

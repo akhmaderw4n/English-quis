@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { ViewState, StudentInfo, QuizSubmission, ViolationLockSession, QuizViolationRecord, Question, ProcedureTextConfig, StudentRestrictionConfig, DashboardBackgroundConfig } from './types';
-import { QUIZ_QUESTIONS, QUIZ_METADATA, INITIAL_STUDENT_SUBMISSIONS, INITIAL_PROCEDURE_TEXT_CONFIG, INITIAL_STUDENT_RESTRICTION_CONFIG, INITIAL_REGISTERED_STUDENTS, getStudentAttemptStatus, normalizeStudentName, normalizeStudentNumber } from './data/quizData';
+import { QUIZ_QUESTIONS, QUIZ_METADATA, ALL_CLASS_LIST, INITIAL_STUDENT_SUBMISSIONS, INITIAL_PROCEDURE_TEXT_CONFIG, INITIAL_STUDENT_RESTRICTION_CONFIG, INITIAL_REGISTERED_STUDENTS, getStudentAttemptStatus, normalizeStudentName, normalizeStudentClass, normalizeStudentNumber, isTeacherManualRosterSubmission } from './data/quizData';
 import { INITIAL_DASHBOARD_BACKGROUND_CONFIG, resolveActiveBackgroundImageUrl } from './utils/dashboardBackground';
 import { Navbar } from './components/Navbar';
 import { Footer } from './components/Footer';
@@ -100,6 +100,22 @@ export default function App() {
     return INITIAL_PROCEDURE_TEXT_CONFIG;
   });
 
+  const ensureAllClassesInRestrictions = (cfg: StudentRestrictionConfig): StudentRestrictionConfig => {
+    const rawAllowed = Array.isArray(cfg.allowedClasses) ? cfg.allowedClasses : ALL_CLASS_LIST;
+    const normAllowed = Array.from(new Set(rawAllowed.map(c => normalizeStudentClass(c)).filter(Boolean)));
+    // If legacy 6-class default (7A-7F) was stored before 7G and 7H were added, automatically include 7G and 7H
+    const has7Ato7F = ['7A', '7B', '7C', '7D', '7E', '7F'].every(c => normAllowed.includes(c));
+    const finalAllowed = has7Ato7F
+      ? Array.from(new Set([...normAllowed, '7G', '7H']))
+      : normAllowed.length > 0
+      ? normAllowed
+      : [...ALL_CLASS_LIST];
+    return {
+      ...cfg,
+      allowedClasses: finalAllowed,
+    };
+  };
+
   // Student study modal state & "1 User 1 Kali Lihat" tracking
   const [isProcedureStudyOpen, setIsProcedureStudyOpen] = useState(false);
   const [studentRestrictions, setStudentRestrictions] = useState<StudentRestrictionConfig>(() => {
@@ -108,7 +124,7 @@ export default function App() {
       if (raw) {
         const parsed = JSON.parse(raw);
         if (parsed && typeof parsed === 'object') {
-          return { ...INITIAL_STUDENT_RESTRICTION_CONFIG, ...parsed };
+          return ensureAllClassesInRestrictions({ ...INITIAL_STUDENT_RESTRICTION_CONFIG, ...parsed });
         }
       }
     } catch {}
@@ -309,7 +325,10 @@ export default function App() {
 
     const unsubscribeRestrictions = subscribeToStudentRestrictions((cloudRestrictions) => {
       if (cloudRestrictions) {
-        const merged = { ...INITIAL_STUDENT_RESTRICTION_CONFIG, ...cloudRestrictions };
+        const merged = ensureAllClassesInRestrictions({
+          ...INITIAL_STUDENT_RESTRICTION_CONFIG,
+          ...cloudRestrictions,
+        });
         setStudentRestrictions(merged);
         try {
           localStorage.setItem(STORAGE_KEY_STUDENT_RESTRICTIONS, JSON.stringify(merged));
@@ -654,8 +673,21 @@ export default function App() {
     } catch {}
     setResumedFromViolation(false);
 
+    // Identify any pre-input teacher roster placeholders for this student so real exam score replaces them
+    const normCurrentName = normalizeStudentName(currentStudent.name);
+    const preInputIdsToRemove = submissions
+      .filter(
+        s =>
+          isTeacherManualRosterSubmission(s) &&
+          normalizeStudentName(s.studentName) === normCurrentName
+      )
+      .map(s => s.id);
+
     // Optimistically update local view
-    setSubmissions(prev => [newSubmission, ...prev.filter(s => s.id !== newSubmission.id)]);
+    setSubmissions(prev => [
+      newSubmission,
+      ...prev.filter(s => s.id !== newSubmission.id && !preInputIdsToRemove.includes(s.id)),
+    ]);
     setLatestSubmission(newSubmission);
     setCurrentView('result');
 
@@ -670,7 +702,7 @@ export default function App() {
           {
             id: `reg-auto-${Date.now()}`,
             name: currentStudent.name.trim(),
-            studentClass: currentStudent.studentClass.trim().toUpperCase(),
+            studentClass: normalizeStudentClass(currentStudent.studentClass) || '7A',
             studentNumber: normalizeStudentNumber(currentStudent.studentNumber) || '1',
           },
         ],
@@ -682,6 +714,9 @@ export default function App() {
     // Persist to Firebase Firestore for cross-device sync
     try {
       await saveSubmissionToFirebase(newSubmission);
+      for (const oldId of preInputIdsToRemove) {
+        await deleteSubmissionFromFirebase(oldId).catch(() => {});
+      }
     } catch (err) {
       console.error('Error saving submission to Firebase:', err);
     }
@@ -814,6 +849,31 @@ export default function App() {
     if (validSubs.length === 0) return;
 
     setSubmissions(prev => [...validSubs, ...prev]);
+
+    // Also sync these students into Database Siswa/Guru (registeredStudents)
+    const currentRoster = studentRestrictions.registeredStudents ?? INITIAL_REGISTERED_STUDENTS;
+    const rosterMap = new Map(currentRoster.map(r => [normalizeStudentName(r.name), r]));
+    let rosterChanged = false;
+    validSubs.forEach((sub, idx) => {
+      const norm = normalizeStudentName(sub.studentName);
+      if (norm && !rosterMap.has(norm)) {
+        rosterMap.set(norm, {
+          id: `reg-batch-${Date.now()}-${idx}`,
+          name: sub.studentName.trim(),
+          studentClass: normalizeStudentClass(sub.studentClass) || '7A',
+          studentNumber: normalizeStudentNumber(sub.studentNumber) || String(idx + 1),
+        });
+        rosterChanged = true;
+      }
+    });
+    if (rosterChanged) {
+      handleUpdateStudentRestrictions({
+        ...studentRestrictions,
+        registeredStudents: Array.from(rosterMap.values()),
+        updatedAt: new Date().toISOString(),
+      });
+    }
+
     try {
       await saveBatchSubmissionsToFirebase(validSubs);
     } catch (err) {

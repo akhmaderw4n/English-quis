@@ -47,7 +47,20 @@ import {
   Image as ImageIcon
 } from 'lucide-react';
 import { QuizSubmission, QuizViolationRecord, Question, ProcedureTextConfig, StudentRestrictionConfig, DashboardBackgroundConfig } from '../types';
-import { QUIZ_QUESTIONS, QUIZ_METADATA, INITIAL_STUDENT_SUBMISSIONS, INITIAL_PROCEDURE_TEXT_CONFIG, INITIAL_STUDENT_RESTRICTION_CONFIG, detectCrossClassDuplicateSubmissions } from '../data/quizData';
+import {
+  QUIZ_QUESTIONS,
+  QUIZ_METADATA,
+  INITIAL_STUDENT_SUBMISSIONS,
+  INITIAL_PROCEDURE_TEXT_CONFIG,
+  INITIAL_STUDENT_RESTRICTION_CONFIG,
+  INITIAL_REGISTERED_STUDENTS,
+  detectCrossClassDuplicateSubmissions,
+  hasStudentSubmittedQuiz,
+  getSubmissionAssessmentStatus,
+  normalizeStudentName,
+  normalizeStudentClass,
+  normalizeStudentNumber,
+} from '../data/quizData';
 import { ReviewModal } from './ReviewModal';
 import { TeacherInputStudent } from './TeacherInputStudent';
 import { WordImportModal } from './WordImportModal';
@@ -187,7 +200,21 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     if (!deleteTarget) return;
     setIsDeleting(true);
     try {
-      await onDeleteSubmission(deleteTarget.id);
+      if (deleteTarget.id.startsWith('reg-unsub-')) {
+        const regId = deleteTarget.id.replace(/^reg-unsub-/, '');
+        if (onUpdateStudentRestrictions) {
+          const currentReg = studentRestrictions.registeredStudents ?? INITIAL_REGISTERED_STUDENTS;
+          await onUpdateStudentRestrictions({
+            ...studentRestrictions,
+            registeredStudents: currentReg.filter(
+              r => r.id !== regId && normalizeStudentName(r.name) !== normalizeStudentName(deleteTarget.studentName)
+            ),
+            updatedAt: new Date().toISOString(),
+          });
+        }
+      } else {
+        await onDeleteSubmission(deleteTarget.id);
+      }
       setDeleteToast(`Data ${deleteTarget.studentName} (${deleteTarget.studentClass}) berhasil dihapus permanen dari semua perangkat.`);
       setDeleteTarget(null);
       setTimeout(() => setDeleteToast(null), 4000);
@@ -215,12 +242,59 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     }
   };
 
+  // Combine submissions with registered students who haven't taken the quiz yet
+  const allStudentRecords = useMemo(() => {
+    const mapByName = new Map<string, QuizSubmission>();
+    submissions.forEach(sub => {
+      const norm = normalizeStudentName(sub.studentName);
+      if (!norm) return;
+      const existing = mapByName.get(norm);
+      if (!existing) {
+        mapByName.set(norm, sub);
+      } else {
+        // Prefer submitted over unsubmitted, or higher score
+        const existingSub = hasStudentSubmittedQuiz(existing);
+        const currentSub = hasStudentSubmittedQuiz(sub);
+        if (currentSub && !existingSub) {
+          mapByName.set(norm, sub);
+        } else if (currentSub && existingSub && sub.score > existing.score) {
+          mapByName.set(norm, sub);
+        }
+      }
+    });
+
+    const defaultIds = new Set(INITIAL_REGISTERED_STUDENTS.map(r => r.id));
+    const registeredList = studentRestrictions.registeredStudents ?? INITIAL_REGISTERED_STUDENTS;
+    registeredList.forEach(reg => {
+      // If submissions was completely cleared, don't show the 5 default sample characters unless seeded
+      if (submissions.length === 0 && defaultIds.has(reg.id)) return;
+      const norm = normalizeStudentName(reg.name);
+      if (!norm || mapByName.has(norm)) return;
+      mapByName.set(norm, {
+        id: `reg-unsub-${reg.id}`,
+        studentName: reg.name,
+        studentClass: normalizeStudentClass(reg.studentClass) || reg.studentClass,
+        studentNumber: (normalizeStudentNumber(reg.studentNumber) || '1').padStart(2, '0'),
+        score: 0,
+        totalQuestions: activeQuestions.length,
+        correctCount: 0,
+        wrongCount: 0,
+        answers: {},
+        timeSpentSeconds: 0,
+        submittedAt: '',
+        hasSubmitted: false,
+      });
+    });
+
+    return Array.from(mapByName.values());
+  }, [submissions, studentRestrictions.registeredStudents, activeQuestions.length]);
+
   // Class list extraction
   const availableClasses = useMemo(() => {
     const set = new Set<string>();
-    submissions.forEach(s => set.add(s.studentClass));
+    allStudentRecords.forEach(s => set.add(normalizeStudentClass(s.studentClass) || s.studentClass));
     return ['ALL', ...Array.from(set).sort()];
-  }, [submissions]);
+  }, [allStudentRecords]);
 
   // Detect any user name used in 2 classes where one is not registered in the Student/Teacher Database
   const crossClassConflicts = useMemo(
@@ -230,69 +304,125 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
 
   // Filtered and sorted submissions
   const filteredSubmissions = useMemo(() => {
-    return submissions
+    return allStudentRecords
       .filter(s => {
-        const matchesClass = selectedClass === 'ALL' || s.studentClass === selectedClass;
+        const normCls = normalizeStudentClass(s.studentClass) || s.studentClass;
+        const matchesClass = selectedClass === 'ALL' || normCls === selectedClass || s.studentClass === selectedClass;
         const matchesSearch = s.studentName.toLowerCase().includes(searchQuery.toLowerCase()) ||
           s.studentNumber.includes(searchQuery);
         return matchesClass && matchesSearch;
       })
       .sort((a, b) => {
         if (sortField === 'absen') {
+          const classCompare = (normalizeStudentClass(a.studentClass) || a.studentClass).localeCompare(
+            normalizeStudentClass(b.studentClass) || b.studentClass
+          );
+          if (selectedClass === 'ALL' && classCompare !== 0) return classCompare;
           const numA = parseInt(String(a.studentNumber).replace(/\D/g, ''), 10) || 0;
           const numB = parseInt(String(b.studentNumber).replace(/\D/g, ''), 10) || 0;
           if (numA !== numB) {
             return sortOrder === 'asc' ? numA - numB : numB - numA;
           }
-          const classCompare = a.studentClass.localeCompare(b.studentClass);
           if (classCompare !== 0) return classCompare;
           return a.studentName.localeCompare(b.studentName);
         } else if (sortField === 'score') {
+          const subA = hasStudentSubmittedQuiz(a);
+          const subB = hasStudentSubmittedQuiz(b);
+          if (subA !== subB) return subA ? -1 : 1; // Always put submitted before unsubmitted
+          if (!subA && !subB) return a.studentName.localeCompare(b.studentName);
           return sortOrder === 'desc' ? b.score - a.score : a.score - b.score;
         } else if (sortField === 'name') {
           return sortOrder === 'desc' 
             ? b.studentName.localeCompare(a.studentName) 
             : a.studentName.localeCompare(b.studentName);
         } else {
-          return sortOrder === 'desc' 
-            ? new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime()
-            : new Date(a.submittedAt).getTime() - new Date(b.submittedAt).getTime();
+          const timeA = a.submittedAt ? new Date(a.submittedAt).getTime() : 0;
+          const timeB = b.submittedAt ? new Date(b.submittedAt).getTime() : 0;
+          return sortOrder === 'desc' ? timeB - timeA : timeA - timeB;
         }
       });
-  }, [submissions, selectedClass, searchQuery, sortField, sortOrder]);
+  }, [allStudentRecords, selectedClass, searchQuery, sortField, sortOrder]);
 
-  // Statistical calculations
+  // Statistical calculations (only count submitted students for score averages & remedial; unsubmitted are NOT given 0 or remedial)
   const stats = useMemo(() => {
-    if (submissions.length === 0) {
-      return { total: 0, avgScore: 0, highest: 0, lowest: 0, passedPercent: 0, passedCount: 0 };
+    const total = allStudentRecords.length;
+    const submittedList = allStudentRecords.filter(s => hasStudentSubmittedQuiz(s));
+    const submittedCount = submittedList.length;
+    const unsubmittedCount = total - submittedCount;
+    if (submittedCount === 0) {
+      return {
+        total,
+        submittedCount: 0,
+        unsubmittedCount,
+        remedialCount: 0,
+        avgScore: 0,
+        highest: 0,
+        lowest: 0,
+        passedPercent: 0,
+        passedCount: 0,
+      };
     }
-    const scores = submissions.map(s => s.score);
-    const total = submissions.length;
+    const scores = submittedList.map(s => s.score);
     const sum = scores.reduce((a, b) => a + b, 0);
-    const avgScore = Math.round((sum / total) * 10) / 10;
+    const avgScore = Math.round((sum / submittedCount) * 10) / 10;
     const highest = Math.max(...scores);
     const lowest = Math.min(...scores);
-    const passedCount = submissions.filter(s => s.score >= QUIZ_METADATA.passingScore).length;
-    const passedPercent = Math.round((passedCount / total) * 100);
+    const passedCount = submittedList.filter(s => s.score >= QUIZ_METADATA.passingScore).length;
+    const remedialCount = submittedList.filter(s => s.score < QUIZ_METADATA.passingScore).length;
+    const passedPercent = Math.round((passedCount / submittedCount) * 100);
 
-    return { total, avgScore, highest, lowest, passedPercent, passedCount };
-  }, [submissions]);
+    return {
+      total,
+      submittedCount,
+      unsubmittedCount,
+      remedialCount,
+      avgScore,
+      highest,
+      lowest,
+      passedPercent,
+      passedCount,
+    };
+  }, [allStudentRecords]);
 
   // Filtered statistical calculations (matches selected class filter for print & Excel/Word export)
   const filteredStats = useMemo(() => {
-    if (filteredSubmissions.length === 0) {
-      return { total: 0, avgScore: 0, highest: 0, lowest: 0, passedPercent: 0, passedCount: 0 };
-    }
-    const scores = filteredSubmissions.map(s => s.score);
     const total = filteredSubmissions.length;
+    const submittedList = filteredSubmissions.filter(s => hasStudentSubmittedQuiz(s));
+    const submittedCount = submittedList.length;
+    const unsubmittedCount = total - submittedCount;
+    if (submittedCount === 0) {
+      return {
+        total,
+        submittedCount: 0,
+        unsubmittedCount,
+        remedialCount: 0,
+        avgScore: 0,
+        highest: 0,
+        lowest: 0,
+        passedPercent: 0,
+        passedCount: 0,
+      };
+    }
+    const scores = submittedList.map(s => s.score);
     const sum = scores.reduce((a, b) => a + b, 0);
-    const avgScore = Math.round((sum / total) * 10) / 10;
+    const avgScore = Math.round((sum / submittedCount) * 10) / 10;
     const highest = Math.max(...scores);
     const lowest = Math.min(...scores);
-    const passedCount = filteredSubmissions.filter(s => s.score >= QUIZ_METADATA.passingScore).length;
-    const passedPercent = Math.round((passedCount / total) * 100);
+    const passedCount = submittedList.filter(s => s.score >= QUIZ_METADATA.passingScore).length;
+    const remedialCount = submittedList.filter(s => s.score < QUIZ_METADATA.passingScore).length;
+    const passedPercent = Math.round((passedCount / submittedCount) * 100);
 
-    return { total, avgScore, highest, lowest, passedPercent, passedCount };
+    return {
+      total,
+      submittedCount,
+      unsubmittedCount,
+      remedialCount,
+      avgScore,
+      highest,
+      lowest,
+      passedPercent,
+      passedCount,
+    };
   }, [filteredSubmissions]);
 
   const recapPrintOptions: PrintDocumentOptions = useMemo(
@@ -306,15 +436,16 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     [recapPaperSize, recapColorMode, recapIsLandscape, recapIncludeQuestionCols, activeQuestions]
   );
 
-  // Item Analysis (Analisis Butir Soal per Question)
+  // Item Analysis (Analisis Butir Soal per Question) - only from students who actually submitted
   const itemAnalysis = useMemo(() => {
+    const submittedSubs = submissions.filter(s => hasStudentSubmittedQuiz(s));
     return activeQuestions.map(q => {
-      if (submissions.length === 0) {
+      if (submittedSubs.length === 0) {
         return { ...q, correctPct: 0, correctCount: 0, total: 0 };
       }
-      const correctCount = submissions.filter(s => s.answers[q.id] === q.correctAnswer).length;
-      const correctPct = Math.round((correctCount / submissions.length) * 100);
-      return { ...q, correctPct, correctCount, total: submissions.length };
+      const correctCount = submittedSubs.filter(s => s.answers[q.id] === q.correctAnswer).length;
+      const correctPct = Math.round((correctCount / submittedSubs.length) * 100);
+      return { ...q, correctPct, correctCount, total: submittedSubs.length };
     });
   }, [submissions, activeQuestions]);
 
@@ -665,12 +796,15 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 sm:gap-4 mb-8">
         <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-2xs">
           <div className="flex items-center justify-between text-slate-500 mb-2">
-            <span className="text-xs font-semibold uppercase tracking-wider">Total Peserta</span>
+            <span className="text-xs font-semibold uppercase tracking-wider">Total Siswa</span>
             <Users className="w-4 h-4 text-blue-600" />
           </div>
           <div className="text-2xl sm:text-3xl font-black text-slate-900">
             {stats.total} <span className="text-xs font-normal text-slate-500">Siswa</span>
           </div>
+          <span className="text-[11px] text-slate-500 mt-1 block">
+            {stats.submittedCount} Submit &bull; {stats.unsubmittedCount} Belum Mengerjakan
+          </span>
         </div>
 
         <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-2xs">
@@ -679,8 +813,11 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
             <TrendingUp className="w-4 h-4 text-amber-600" />
           </div>
           <div className="text-2xl sm:text-3xl font-black text-slate-900">
-            {stats.avgScore} <span className="text-xs font-normal text-slate-500">/ 100</span>
+            {stats.submittedCount > 0 ? stats.avgScore : '—'} <span className="text-xs font-normal text-slate-500">{stats.submittedCount > 0 ? '/ 100' : ''}</span>
           </div>
+          <span className="text-[11px] text-slate-500 mt-1 block">
+            Dari {stats.submittedCount} siswa yang sudah submit
+          </span>
         </div>
 
         <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-2xs">
@@ -689,10 +826,10 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
             <Award className="w-4 h-4 text-emerald-600" />
           </div>
           <div className="text-2xl sm:text-3xl font-black text-emerald-700">
-            {stats.passedPercent}%
+            {stats.submittedCount > 0 ? `${stats.passedPercent}%` : '—'}
           </div>
           <span className="text-[11px] text-slate-500 mt-1 block">
-            {stats.passedCount} dari {stats.total} tuntas
+            {stats.passedCount} Tuntas &bull; {stats.remedialCount} Remedial (&lt;75)
           </span>
         </div>
 
@@ -702,7 +839,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
             <CheckCircle2 className="w-4 h-4 text-emerald-500" />
           </div>
           <div className="text-2xl sm:text-3xl font-black text-emerald-600">
-            {stats.highest}
+            {stats.submittedCount > 0 ? stats.highest : '—'}
           </div>
         </div>
 
@@ -712,7 +849,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
             <XCircle className="w-4 h-4 text-rose-500" />
           </div>
           <div className="text-2xl sm:text-3xl font-black text-slate-700">
-            {stats.lowest}
+            {stats.submittedCount > 0 ? stats.lowest : '—'}
           </div>
         </div>
       </div>
@@ -1319,19 +1456,24 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                       </div>
                       <div className="flex">
                         <span className="w-32 font-bold shrink-0">Jumlah Peserta</span>
-                        <span className="font-bold">: {filteredStats.total} Siswa</span>
+                        <span className="font-bold">
+                          : {filteredStats.total} Siswa ({filteredStats.submittedCount} Submit / {filteredStats.unsubmittedCount} Belum Mengerjakan)
+                        </span>
                       </div>
                       <div className="flex">
                         <span className="w-32 font-bold shrink-0">Rata-Rata Kelas</span>
                         <span className="font-bold">
-                          : {filteredStats.avgScore} (Tertinggi: {filteredStats.highest} &bull; Terendah: {filteredStats.lowest})
+                          :{' '}
+                          {filteredStats.submittedCount > 0
+                            ? `${filteredStats.avgScore} (Tertinggi: ${filteredStats.highest} • Terendah: ${filteredStats.lowest})`
+                            : '-'}
                         </span>
                       </div>
                       <div className="flex">
-                        <span className="w-32 font-bold shrink-0">Ketuntasan KKM</span>
+                        <span className="w-32 font-bold shrink-0">Status Penilaian</span>
                         <span className="font-bold">
-                          : {filteredStats.passedPercent}% ({filteredStats.passedCount} Tuntas /{' '}
-                          {Math.max(0, filteredStats.total - filteredStats.passedCount)} Remedial)
+                          : {filteredStats.passedCount} Tuntas &bull; {filteredStats.remedialCount} Remedial (&lt;75) &bull;{' '}
+                          {filteredStats.unsubmittedCount} Belum Mengerjakan
                         </span>
                       </div>
                     </div>
@@ -1349,7 +1491,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                           <th className="border border-black py-2 px-2 text-center w-12">Benar</th>
                           <th className="border border-black py-2 px-2 text-center w-12">Salah</th>
                           <th className="border border-black py-2 px-2 text-center w-16">Nilai Akhir</th>
-                          <th className="border border-black py-2 px-2 text-center w-24">Keterangan</th>
+                          <th className="border border-black py-2 px-2 text-center w-28">Status</th>
                           <th className="border border-black py-2 px-2 text-center w-16">Durasi</th>
                           <th className="border border-black py-2 px-2 text-center w-24">Tanggal</th>
                           {recapIncludeQuestionCols &&
@@ -1363,16 +1505,18 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                       </thead>
                       <tbody>
                         {filteredSubmissions.map((sub, idx) => {
-                          const isPass = sub.score >= QUIZ_METADATA.passingScore;
+                          const isSubmitted = hasStudentSubmittedQuiz(sub);
+                          const status = getSubmissionAssessmentStatus(sub, QUIZ_METADATA.passingScore);
                           const durMins = Math.floor((sub.timeSpentSeconds || 0) / 60);
                           const durSecs = (sub.timeSpentSeconds || 0) % 60;
-                          const dateStr = sub.submittedAt
-                            ? new Date(sub.submittedAt).toLocaleDateString('id-ID', {
-                                day: '2-digit',
-                                month: 'short',
-                                year: 'numeric',
-                              })
-                            : '-';
+                          const dateStr =
+                            isSubmitted && sub.submittedAt
+                              ? new Date(sub.submittedAt).toLocaleDateString('id-ID', {
+                                  day: '2-digit',
+                                  month: 'short',
+                                  year: 'numeric',
+                                })
+                              : '';
 
                           return (
                             <tr key={sub.id}>
@@ -1387,38 +1531,50 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                                 {sub.studentClass}
                               </td>
                               <td className="border border-black py-1.5 px-2 text-center">
-                                {sub.correctCount}
+                                {isSubmitted ? sub.correctCount : ''}
                               </td>
                               <td className="border border-black py-1.5 px-2 text-center">
-                                {sub.wrongCount}
+                                {isSubmitted ? sub.wrongCount : ''}
                               </td>
                               <td
                                 className={`border border-black py-1.5 px-2 text-center font-bold ${
-                                  isPass ? 'bg-emerald-50 text-emerald-950' : 'bg-rose-50 text-rose-950'
+                                  !isSubmitted
+                                    ? 'bg-white text-slate-500'
+                                    : status === 'TUNTAS'
+                                    ? 'bg-emerald-50 text-emerald-950'
+                                    : 'bg-rose-50 text-rose-950'
                                 }`}
                               >
-                                {sub.score}
+                                {isSubmitted ? sub.score : ''}
                               </td>
                               <td
                                 className={`border border-black py-1.5 px-2 text-center font-bold text-[11px] ${
-                                  isPass ? 'bg-emerald-50 text-emerald-900' : 'bg-rose-50 text-rose-900'
+                                  !isSubmitted
+                                    ? 'bg-slate-50 text-slate-700'
+                                    : status === 'TUNTAS'
+                                    ? 'bg-emerald-50 text-emerald-900'
+                                    : 'bg-rose-50 text-rose-900'
                                 }`}
                               >
-                                {isPass ? 'TUNTAS' : 'BELUM TUNTAS'}
+                                {status === 'TUNTAS'
+                                  ? 'TUNTAS'
+                                  : status === 'REMEDIAL'
+                                  ? 'REMEDIAL'
+                                  : 'BELUM MENGERJAKAN'}
                               </td>
                               <td className="border border-black py-1.5 px-2 text-center">
-                                {durMins}m {durSecs}s
+                                {isSubmitted ? `${durMins}m ${durSecs}s` : ''}
                               </td>
                               <td className="border border-black py-1.5 px-2 text-center">{dateStr}</td>
                               {recapIncludeQuestionCols &&
                                 activeQuestions.map((q) => {
-                                  const ans = sub.answers?.[q.id] || '-';
+                                  const ans = isSubmitted ? sub.answers?.[q.id] || '' : '';
                                   const isCorrect = ans === q.correctAnswer;
                                   return (
                                     <td
                                       key={q.id}
                                       className={`border border-black py-1 px-1 text-center font-bold text-[11px] ${
-                                        isCorrect ? 'text-emerald-800' : 'text-rose-700'
+                                        !ans ? 'text-slate-400' : isCorrect ? 'text-emerald-800' : 'text-rose-700'
                                       }`}
                                     >
                                       {ans}
@@ -1432,17 +1588,16 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                       <tfoot>
                         <tr className="bg-slate-100 font-bold">
                           <td colSpan={6} className="border border-black py-1.5 px-3 text-right">
-                            RATA-RATA NILAI KELAS :
+                            RATA-RATA NILAI (SISWA SUBMIT) :
                           </td>
                           <td className="border border-black py-1.5 px-2 text-center text-sm">
-                            {filteredStats.avgScore}
+                            {filteredStats.submittedCount > 0 ? filteredStats.avgScore : ''}
                           </td>
                           <td
                             colSpan={3 + (recapIncludeQuestionCols ? activeQuestions.length : 0)}
                             className="border border-black py-1.5 px-3 text-left"
                           >
-                            Ketuntasan (KKM &ge; {QUIZ_METADATA.passingScore}): {filteredStats.passedPercent}% (
-                            {filteredStats.passedCount} dari {filteredStats.total} Siswa Tuntas)
+                            Tuntas (&ge;{QUIZ_METADATA.passingScore}): {filteredStats.passedCount} Siswa &bull; Remedial (&lt;{QUIZ_METADATA.passingScore}): {filteredStats.remedialCount} Siswa &bull; Belum Mengerjakan: {filteredStats.unsubmittedCount} Siswa
                           </td>
                         </tr>
                         <tr className="bg-slate-100 font-bold">
@@ -1450,14 +1605,15 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                             NILAI TERTINGGI / NILAI TERENDAH :
                           </td>
                           <td className="border border-black py-1.5 px-2 text-center">
-                            {filteredStats.highest} / {filteredStats.lowest}
+                            {filteredStats.submittedCount > 0
+                              ? `${filteredStats.highest} / ${filteredStats.lowest}`
+                              : ''}
                           </td>
                           <td
                             colSpan={3 + (recapIncludeQuestionCols ? activeQuestions.length : 0)}
                             className="border border-black py-1.5 px-3 text-left"
                           >
-                            Tuntas: {filteredStats.passedCount} Siswa &bull; Belum Tuntas (Remedial):{' '}
-                            {Math.max(0, filteredStats.total - filteredStats.passedCount)} Siswa
+                            Sudah Submit: {filteredStats.submittedCount} Siswa &bull; Belum Mengerjakan: {filteredStats.unsubmittedCount} Siswa
                           </td>
                         </tr>
                       </tfoot>
@@ -1528,13 +1684,17 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                   </thead>
                   <tbody className="divide-y divide-slate-100 font-medium">
                     {filteredSubmissions.map((sub, idx) => {
-                      const isTuntas = sub.score >= QUIZ_METADATA.passingScore;
-                      const dateFormatted = new Date(sub.submittedAt).toLocaleTimeString('id-ID', {
-                        hour: '2-digit',
-                        minute: '2-digit',
-                        day: 'numeric',
-                        month: 'short'
-                      });
+                      const isSubmitted = hasStudentSubmittedQuiz(sub);
+                      const status = getSubmissionAssessmentStatus(sub, QUIZ_METADATA.passingScore);
+                      const dateFormatted =
+                        isSubmitted && sub.submittedAt
+                          ? new Date(sub.submittedAt).toLocaleTimeString('id-ID', {
+                              hour: '2-digit',
+                              minute: '2-digit',
+                              day: 'numeric',
+                              month: 'short'
+                            })
+                          : 'Belum Mengerjakan';
 
                       return (
                         <tr key={sub.id} className="hover:bg-amber-50/40 transition-colors">
@@ -1568,56 +1728,80 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                             {sub.studentNumber}
                           </td>
                           <td className="py-3.5 px-4 text-center">
-                            <span className={`inline-block px-2.5 py-1 rounded-lg font-black text-sm ${
-                              isTuntas ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
-                            }`}>
-                              {sub.score}
-                            </span>
+                            {isSubmitted ? (
+                              <span className={`inline-block px-2.5 py-1 rounded-lg font-black text-sm ${
+                                status === 'TUNTAS' ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
+                              }`}>
+                                {sub.score}
+                              </span>
+                            ) : (
+                              <span className="inline-block px-2.5 py-1 text-slate-400 font-normal text-xs">
+                                {/* Nilai akhir dikosongkan jika belum mengerjakan */}
+                              </span>
+                            )}
                           </td>
                           <td className="py-3.5 px-3 text-center">
-                            {isTuntas ? (
+                            {status === 'TUNTAS' ? (
                               <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
                                 TUNTAS
                               </span>
-                            ) : (
+                            ) : status === 'REMEDIAL' ? (
                               <span className="text-[11px] font-bold text-rose-700 bg-rose-50 px-2 py-0.5 rounded-md border border-rose-200">
                                 REMEDIAL
+                              </span>
+                            ) : (
+                              <span className="text-[11px] font-bold text-slate-700 bg-slate-100 px-2.5 py-0.5 rounded-md border border-slate-300">
+                                BELUM MENGERJAKAN
                               </span>
                             )}
                           </td>
                           <td className="py-3.5 px-4 text-center font-semibold">
-                            <span className="text-emerald-700">{sub.correctCount}</span> / <span className="text-rose-600">{sub.wrongCount}</span>
+                            {isSubmitted ? (
+                              <>
+                                <span className="text-emerald-700">{sub.correctCount}</span> / <span className="text-rose-600">{sub.wrongCount}</span>
+                              </>
+                            ) : (
+                              <span className="text-slate-300">-</span>
+                            )}
                           </td>
                           <td className="py-3.5 px-4 text-center font-mono text-slate-600">
-                            {Math.floor(sub.timeSpentSeconds / 60)}m {sub.timeSpentSeconds % 60}s
+                            {isSubmitted ? (
+                              `${Math.floor(sub.timeSpentSeconds / 60)}m ${sub.timeSpentSeconds % 60}s`
+                            ) : (
+                              <span className="text-slate-300">-</span>
+                            )}
                           </td>
                           <td className="py-3.5 px-4 text-slate-500 text-[11px]">
                             {dateFormatted}
                           </td>
                           <td className="py-3.5 px-4 text-center">
                             <div className="flex items-center justify-center gap-1.5">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  playClickSound();
-                                  executePrintStudentScore(
-                                    { name: sub.studentName, studentClass: sub.studentClass, studentNumber: sub.studentNumber },
-                                    sub
-                                  );
-                                }}
-                                className="p-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 transition-colors"
-                                title="Cetak Lembar Bukti Nilai Siswa Ini"
-                              >
-                                <Printer className="w-4 h-4" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setInspectSubmission(sub)}
-                                className="p-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 transition-colors"
-                                title="Lihat Lembar Jawaban Siswa"
-                              >
-                                <Eye className="w-4 h-4" />
-                              </button>
+                              {isSubmitted && (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      playClickSound();
+                                      executePrintStudentScore(
+                                        { name: sub.studentName, studentClass: sub.studentClass, studentNumber: sub.studentNumber },
+                                        sub
+                                      );
+                                    }}
+                                    className="p-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 transition-colors"
+                                    title="Cetak Lembar Bukti Nilai Siswa Ini"
+                                  >
+                                    <Printer className="w-4 h-4" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setInspectSubmission(sub)}
+                                    className="p-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 transition-colors"
+                                    title="Lihat Lembar Jawaban Siswa"
+                                  >
+                                    <Eye className="w-4 h-4" />
+                                  </button>
+                                </>
+                              )}
                               <button
                                 type="button"
                                 onClick={() => {
@@ -3041,19 +3225,24 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                       </div>
                       <div className="flex">
                         <span className="w-32 font-bold shrink-0">Jumlah Peserta</span>
-                        <span className="font-bold">: {filteredStats.total} Siswa</span>
+                        <span className="font-bold">
+                          : {filteredStats.total} Siswa ({filteredStats.submittedCount} Submit / {filteredStats.unsubmittedCount} Belum Mengerjakan)
+                        </span>
                       </div>
                       <div className="flex">
                         <span className="w-32 font-bold shrink-0">Rata-Rata Kelas</span>
                         <span className="font-bold">
-                          : {filteredStats.avgScore} (Tertinggi: {filteredStats.highest} &bull; Terendah: {filteredStats.lowest})
+                          :{' '}
+                          {filteredStats.submittedCount > 0
+                            ? `${filteredStats.avgScore} (Tertinggi: ${filteredStats.highest} • Terendah: ${filteredStats.lowest})`
+                            : '-'}
                         </span>
                       </div>
                       <div className="flex">
-                        <span className="w-32 font-bold shrink-0">Ketuntasan KKM</span>
+                        <span className="w-32 font-bold shrink-0">Status Penilaian</span>
                         <span className="font-bold">
-                          : {filteredStats.passedPercent}% ({filteredStats.passedCount} Tuntas /{' '}
-                          {Math.max(0, filteredStats.total - filteredStats.passedCount)} Remedial)
+                          : {filteredStats.passedCount} Tuntas &bull; {filteredStats.remedialCount} Remedial (&lt;75) &bull;{' '}
+                          {filteredStats.unsubmittedCount} Belum Mengerjakan
                         </span>
                       </div>
                     </div>
@@ -3070,7 +3259,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                           <th className="border border-black py-2 px-2 text-center w-12">Benar</th>
                           <th className="border border-black py-2 px-2 text-center w-12">Salah</th>
                           <th className="border border-black py-2 px-2 text-center w-16">Nilai Akhir</th>
-                          <th className="border border-black py-2 px-2 text-center w-24">Keterangan</th>
+                          <th className="border border-black py-2 px-2 text-center w-28">Status</th>
                           <th className="border border-black py-2 px-2 text-center w-16">Durasi</th>
                           <th className="border border-black py-2 px-2 text-center w-24">Tanggal</th>
                           {recapIncludeQuestionCols &&
@@ -3084,16 +3273,18 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                       </thead>
                       <tbody>
                         {filteredSubmissions.map((sub, idx) => {
-                          const isPass = sub.score >= QUIZ_METADATA.passingScore;
+                          const isSubmitted = hasStudentSubmittedQuiz(sub);
+                          const status = getSubmissionAssessmentStatus(sub, QUIZ_METADATA.passingScore);
                           const durMins = Math.floor((sub.timeSpentSeconds || 0) / 60);
                           const durSecs = (sub.timeSpentSeconds || 0) % 60;
-                          const dateStr = sub.submittedAt
-                            ? new Date(sub.submittedAt).toLocaleDateString('id-ID', {
-                                day: '2-digit',
-                                month: 'short',
-                                year: 'numeric',
-                              })
-                            : '-';
+                          const dateStr =
+                            isSubmitted && sub.submittedAt
+                              ? new Date(sub.submittedAt).toLocaleDateString('id-ID', {
+                                  day: '2-digit',
+                                  month: 'short',
+                                  year: 'numeric',
+                                })
+                              : '';
 
                           return (
                             <tr key={sub.id}>
@@ -3108,38 +3299,50 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                                 {sub.studentClass}
                               </td>
                               <td className="border border-black py-1.5 px-2 text-center">
-                                {sub.correctCount}
+                                {isSubmitted ? sub.correctCount : ''}
                               </td>
                               <td className="border border-black py-1.5 px-2 text-center">
-                                {sub.wrongCount}
+                                {isSubmitted ? sub.wrongCount : ''}
                               </td>
                               <td
                                 className={`border border-black py-1.5 px-2 text-center font-bold ${
-                                  isPass ? 'bg-emerald-50 text-emerald-950' : 'bg-rose-50 text-rose-950'
+                                  !isSubmitted
+                                    ? 'bg-white text-slate-500'
+                                    : status === 'TUNTAS'
+                                    ? 'bg-emerald-50 text-emerald-950'
+                                    : 'bg-rose-50 text-rose-950'
                                 }`}
                               >
-                                {sub.score}
+                                {isSubmitted ? sub.score : ''}
                               </td>
                               <td
                                 className={`border border-black py-1.5 px-2 text-center font-bold text-[11px] ${
-                                  isPass ? 'bg-emerald-50 text-emerald-900' : 'bg-rose-50 text-rose-900'
+                                  !isSubmitted
+                                    ? 'bg-slate-50 text-slate-700'
+                                    : status === 'TUNTAS'
+                                    ? 'bg-emerald-50 text-emerald-900'
+                                    : 'bg-rose-50 text-rose-900'
                                 }`}
                               >
-                                {isPass ? 'TUNTAS' : 'BELUM TUNTAS'}
+                                {status === 'TUNTAS'
+                                  ? 'TUNTAS'
+                                  : status === 'REMEDIAL'
+                                  ? 'REMEDIAL'
+                                  : 'BELUM MENGERJAKAN'}
                               </td>
                               <td className="border border-black py-1.5 px-2 text-center">
-                                {durMins}m {durSecs}s
+                                {isSubmitted ? `${durMins}m ${durSecs}s` : ''}
                               </td>
                               <td className="border border-black py-1.5 px-2 text-center">{dateStr}</td>
                               {recapIncludeQuestionCols &&
                                 activeQuestions.map((q) => {
-                                  const ans = sub.answers?.[q.id] || '-';
+                                  const ans = isSubmitted ? sub.answers?.[q.id] || '' : '';
                                   const isCorrect = ans === q.correctAnswer;
                                   return (
                                     <td
                                       key={q.id}
                                       className={`border border-black py-1 px-1 text-center font-bold text-[11px] ${
-                                        isCorrect ? 'text-emerald-800' : 'text-rose-700'
+                                        !ans ? 'text-slate-400' : isCorrect ? 'text-emerald-800' : 'text-rose-700'
                                       }`}
                                     >
                                       {ans}
@@ -3153,17 +3356,16 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                       <tfoot>
                         <tr className="bg-slate-100 font-bold">
                           <td colSpan={6} className="border border-black py-1.5 px-3 text-right">
-                            RATA-RATA NILAI KELAS :
+                            RATA-RATA NILAI (SISWA SUBMIT) :
                           </td>
                           <td className="border border-black py-1.5 px-2 text-center text-sm">
-                            {filteredStats.avgScore}
+                            {filteredStats.submittedCount > 0 ? filteredStats.avgScore : ''}
                           </td>
                           <td
                             colSpan={3 + (recapIncludeQuestionCols ? activeQuestions.length : 0)}
                             className="border border-black py-1.5 px-3 text-left"
                           >
-                            Ketuntasan (KKM &ge; {QUIZ_METADATA.passingScore}): {filteredStats.passedPercent}% (
-                            {filteredStats.passedCount} dari {filteredStats.total} Siswa Tuntas)
+                            Tuntas (&ge;{QUIZ_METADATA.passingScore}): {filteredStats.passedCount} Siswa &bull; Remedial (&lt;{QUIZ_METADATA.passingScore}): {filteredStats.remedialCount} Siswa &bull; Belum Mengerjakan: {filteredStats.unsubmittedCount} Siswa
                           </td>
                         </tr>
                         <tr className="bg-slate-100 font-bold">
@@ -3171,14 +3373,15 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                             NILAI TERTINGGI / NILAI TERENDAH :
                           </td>
                           <td className="border border-black py-1.5 px-2 text-center">
-                            {filteredStats.highest} / {filteredStats.lowest}
+                            {filteredStats.submittedCount > 0
+                              ? `${filteredStats.highest} / ${filteredStats.lowest}`
+                              : ''}
                           </td>
                           <td
                             colSpan={3 + (recapIncludeQuestionCols ? activeQuestions.length : 0)}
                             className="border border-black py-1.5 px-3 text-left"
                           >
-                            Tuntas: {filteredStats.passedCount} Siswa &bull; Belum Tuntas (Remedial):{' '}
-                            {Math.max(0, filteredStats.total - filteredStats.passedCount)} Siswa
+                            Sudah Submit: {filteredStats.submittedCount} Siswa &bull; Belum Mengerjakan: {filteredStats.unsubmittedCount} Siswa
                           </td>
                         </tr>
                       </tfoot>

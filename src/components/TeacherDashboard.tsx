@@ -1050,10 +1050,10 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
             onClick={handleExportExcelWordStyle}
             disabled={filteredSubmissions.length === 0}
             className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-semibold text-xs flex items-center gap-1.5 transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-2xs cursor-pointer"
-            title="Download file Excel (.xls) dengan tata letak halaman seperti Word saat diprint (Kop Surat, Tabel Bergaris, Tanda Tangan & Fit 1 Halaman A4)"
+            title="Download file Excel (.xls)"
           >
             <FileSpreadsheet className="w-4 h-4" />
-            <span>Export Excel (Siap Print Seperti Word)</span>
+            <span>Export Excel</span>
           </button>
 
           <button
@@ -1224,87 +1224,6 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
               )}
             </div>
           </div>
-
-          {/* Print-Ready Excel / Word Format Controls Bar */}
-          {filteredSubmissions.length > 0 && (
-            <div className="bg-emerald-950 text-white px-4 py-3 rounded-2xl border border-emerald-800 shadow-xs flex flex-col lg:flex-row items-start lg:items-center justify-between gap-3 text-xs">
-              <div className="flex items-start sm:items-center gap-2.5">
-                <div className="w-8 h-8 rounded-xl bg-emerald-500 text-slate-950 flex items-center justify-center shrink-0 font-black">
-                  <FileSpreadsheet className="w-4 h-4" />
-                </div>
-                <div>
-                  <div className="font-bold text-emerald-300 flex items-center gap-2 flex-wrap">
-                    <span>Format Excel Disesuaikan Seperti Dokumen Word Saat Diprint (A4 Fit-to-Page)</span>
-                  </div>
-                  <p className="text-[11px] text-emerald-100/80 mt-0.5">
-                    Dilengkapi Kop Surat Resmi, Identitas 2 Kolom, Tabel Bergaris Hitam Tegas, Baris Rata-rata &amp; Ketuntasan, serta Tanda Tangan Kepala Sekolah &amp; Guru Mapel.
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto justify-end shrink-0">
-                <select
-                  value={recapIsLandscape ? 'landscape' : 'portrait'}
-                  onChange={(e) => setRecapIsLandscape(e.target.value === 'landscape')}
-                  className="px-2.5 py-1.5 rounded-lg bg-emerald-900 text-white border border-emerald-700 font-bold text-[11px] cursor-pointer outline-hidden"
-                  title="Pilih orientasi kertas saat diprint di Excel/Word"
-                >
-                  <option value="portrait">Kertas: Portrait (Tegak Seperti Word)</option>
-                  <option value="landscape">Kertas: Landscape (Mendatar)</option>
-                </select>
-
-                <select
-                  value={recapPaperSize}
-                  onChange={(e) => setRecapPaperSize(e.target.value as 'A4' | 'F4' | 'Letter')}
-                  className="px-2.5 py-1.5 rounded-lg bg-emerald-900 text-white border border-emerald-700 font-bold text-[11px] cursor-pointer outline-hidden"
-                  title="Pilih ukuran kertas cetak"
-                >
-                  <option value="A4">Ukuran A4</option>
-                  <option value="F4">Ukuran F4 / Folio</option>
-                  <option value="Letter">Ukuran Letter</option>
-                </select>
-
-                <button
-                  type="button"
-                  onClick={() => setRecapIncludeQuestionCols((prev) => !prev)}
-                  className={`px-2.5 py-1.5 rounded-lg border font-bold text-[11px] transition-colors cursor-pointer ${
-                    recapIncludeQuestionCols
-                      ? 'bg-amber-400 text-slate-950 border-amber-300'
-                      : 'bg-emerald-900 text-emerald-100 border-emerald-700 hover:bg-emerald-800'
-                  }`}
-                >
-                  {recapIncludeQuestionCols ? '✓ + Kolom Soal S1-S10' : '+ Kolom Soal S1-S10'}
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleExportExcelWordStyle}
-                  className="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-[11px] flex items-center gap-1.5 transition-all cursor-pointer shadow-2xs"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  <span>Unduh Excel (.xls)</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleExportWordRecap}
-                  className="px-3 py-1.5 rounded-lg bg-blue-500 hover:bg-blue-400 text-white font-black text-[11px] flex items-center gap-1.5 transition-all cursor-pointer shadow-2xs"
-                >
-                  <FileText className="w-3.5 h-3.5" />
-                  <span>Unduh Word (.doc)</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleExecuteDirectPrintRecap}
-                  className="px-3 py-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-[11px] flex items-center gap-1.5 transition-all cursor-pointer shadow-2xs"
-                >
-                  <Printer className="w-3.5 h-3.5" />
-                  <span>Print Sekarang</span>
-                </button>
-              </div>
-            </div>
-          )}
 
           {/* Student Table */}
           <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs">

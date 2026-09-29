@@ -56,7 +56,15 @@ import { ProcedureTextEditor } from './ProcedureTextEditor';
 import { StudentRestrictionPanel } from './StudentRestrictionPanel';
 import { downloadWordCompatibleDoc } from '../utils/wordQuestionParser';
 import { playClickSound, playUnlockSuccessSound, playViolationAlertSound } from '../utils/audio';
-import { executePrintStudentScore, executePrintTeacherRecap, openTeacherRecapInNewTab } from '../utils/printReport';
+import {
+  executePrintStudentScore,
+  executePrintTeacherRecap,
+  openTeacherRecapInNewTab,
+  downloadTeacherRecapExcelWordStyle,
+  downloadTeacherRecapWordDoc,
+  downloadTeacherRecapCsv,
+  PrintDocumentOptions,
+} from '../utils/printReport';
 
 interface TeacherDashboardProps {
   submissions: QuizSubmission[];
@@ -117,6 +125,14 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
   const [sortField, setSortField] = useState<'absen' | 'score' | 'name' | 'time'>('absen');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [inspectSubmission, setInspectSubmission] = useState<QuizSubmission | null>(null);
+
+  // Word-style Excel & Print Preview states
+  const [recapViewMode, setRecapViewMode] = useState<'table' | 'word_print'>('table');
+  const [isRecapPrintModalOpen, setIsRecapPrintModalOpen] = useState(false);
+  const [recapPaperSize, setRecapPaperSize] = useState<'A4' | 'F4' | 'Letter'>('A4');
+  const [recapIsLandscape, setRecapIsLandscape] = useState<boolean>(false);
+  const [recapColorMode, setRecapColorMode] = useState<'color' | 'grayscale'>('color');
+  const [recapIncludeQuestionCols, setRecapIncludeQuestionCols] = useState<boolean>(false);
 
   // Question Bank / Word Import states
   const [isWordImportOpen, setIsWordImportOpen] = useState(false);
@@ -255,6 +271,34 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     return { total, avgScore, highest, lowest, passedPercent, passedCount };
   }, [submissions]);
 
+  // Filtered statistical calculations (matches selected class filter for print & Excel/Word export)
+  const filteredStats = useMemo(() => {
+    if (filteredSubmissions.length === 0) {
+      return { total: 0, avgScore: 0, highest: 0, lowest: 0, passedPercent: 0, passedCount: 0 };
+    }
+    const scores = filteredSubmissions.map(s => s.score);
+    const total = filteredSubmissions.length;
+    const sum = scores.reduce((a, b) => a + b, 0);
+    const avgScore = Math.round((sum / total) * 10) / 10;
+    const highest = Math.max(...scores);
+    const lowest = Math.min(...scores);
+    const passedCount = filteredSubmissions.filter(s => s.score >= QUIZ_METADATA.passingScore).length;
+    const passedPercent = Math.round((passedCount / total) * 100);
+
+    return { total, avgScore, highest, lowest, passedPercent, passedCount };
+  }, [filteredSubmissions]);
+
+  const recapPrintOptions: PrintDocumentOptions = useMemo(
+    () => ({
+      paperSize: recapPaperSize,
+      colorMode: recapColorMode,
+      isLandscape: recapIsLandscape,
+      includeQuestionColumns: recapIncludeQuestionCols,
+      activeQuestions,
+    }),
+    [recapPaperSize, recapColorMode, recapIsLandscape, recapIncludeQuestionCols, activeQuestions]
+  );
+
   // Item Analysis (Analisis Butir Soal per Question)
   const itemAnalysis = useMemo(() => {
     return activeQuestions.map(q => {
@@ -267,38 +311,45 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     });
   }, [submissions, activeQuestions]);
 
-  // Export to CSV with UTF-8 BOM
+  // Export to Excel (.xls) formatted like Microsoft Word when printed (A4 Fit-to-Page, Kop Surat, Borders, Signature Block)
+  const handleExportExcelWordStyle = () => {
+    playClickSound();
+    if (filteredSubmissions.length === 0) return;
+
+    downloadTeacherRecapExcelWordStyle(
+      filteredSubmissions,
+      selectedClass,
+      filteredStats,
+      recapPrintOptions
+    );
+    setDeleteToast(
+      'File Excel (.xls) berhasil diunduh dengan format siap cetak seperti dokumen Word (Kop Surat, Tabel Bergaris, Tanda Tangan & Fit 1 Halaman A4).'
+    );
+    setTimeout(() => setDeleteToast(null), 5000);
+  };
+
+  // Export to Word (.doc) with identical official print layout
+  const handleExportWordRecap = () => {
+    playClickSound();
+    if (filteredSubmissions.length === 0) return;
+
+    downloadTeacherRecapWordDoc(
+      filteredSubmissions,
+      selectedClass,
+      filteredStats,
+      recapPrintOptions
+    );
+    setDeleteToast(
+      'File Microsoft Word (.doc) rekap nilai siap cetak berhasil diunduh.'
+    );
+    setTimeout(() => setDeleteToast(null), 4500);
+  };
+
+  // Export raw CSV if needed
   const handleExportCSV = () => {
     playClickSound();
-    if (submissions.length === 0) return;
-
-    let csvContent = '\uFEFF'; // UTF-8 BOM
-    csvContent += `REKAPITULASI NILAI KUIS BAHASA INGGRIS - KELAS 7 SMP\n`;
-    csvContent += `Topik: Introducing My self and other (Materi Descriptive text)\n`;
-    csvContent += `Buku: English for Nusantara (Kurikulum Merdeka)\n`;
-    csvContent += `Guru Pengampu: ${QUIZ_METADATA.branding}\n`;
-    csvContent += `KKM: ${QUIZ_METADATA.passingScore}\n\n`;
-
-    // Headers
-    csvContent += `No,Nama Siswa,Kelas,No Absen,Nilai Akhir,Status Kelulusan,Benar,Salah,Durasi (Detik),Tanggal Pengerjaan,` +
-      activeQuestions.map(q => `Soal ${q.id} (${q.correctAnswer})`).join(',') + '\n';
-
-    // Data rows
-    filteredSubmissions.forEach((s, idx) => {
-      const status = s.score >= QUIZ_METADATA.passingScore ? 'TUNTAS' : 'BELUM TUNTAS';
-      const dateStr = new Date(s.submittedAt).toLocaleString('id-ID');
-      const questionAnswers = activeQuestions.map(q => s.answers[q.id] || '-').join(',');
-      csvContent += `${idx + 1},"${s.studentName}","${s.studentClass}","${s.studentNumber}",${s.score},"${status}",${s.correctCount},${s.wrongCount},${s.timeSpentSeconds},"${dateStr}",${questionAnswers}\n`;
-    });
-
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', `Rekap_Nilai_ProcedureText_${selectedClass}_${new Date().toISOString().slice(0, 10)}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    if (filteredSubmissions.length === 0) return;
+    downloadTeacherRecapCsv(filteredSubmissions, selectedClass, activeQuestions);
   };
 
   const handlePrint = () => {
@@ -307,7 +358,13 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
       alert('Tidak ada data siswa untuk dicetak pada filter kelas yang dipilih.');
       return;
     }
-    executePrintTeacherRecap(filteredSubmissions, selectedClass, stats);
+    setIsRecapPrintModalOpen(true);
+  };
+
+  const handleExecuteDirectPrintRecap = () => {
+    playClickSound();
+    if (filteredSubmissions.length === 0) return;
+    executePrintTeacherRecap(filteredSubmissions, selectedClass, filteredStats, recapPrintOptions);
   };
 
   const handleSaveNewPin = (e: React.FormEvent) => {
@@ -924,26 +981,38 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
         </div>
 
         {/* Global actions */}
-        <div className="flex items-center gap-2 self-end lg:self-auto shrink-0">
+        <div className="flex items-center gap-2 self-end lg:self-auto shrink-0 flex-wrap justify-end">
           <button
             type="button"
-            onClick={handleExportCSV}
-            disabled={submissions.length === 0}
+            onClick={handleExportExcelWordStyle}
+            disabled={filteredSubmissions.length === 0}
             className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-semibold text-xs flex items-center gap-1.5 transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-2xs cursor-pointer"
-            title="Download file Excel/CSV"
+            title="Download file Excel (.xls) dengan tata letak halaman seperti Word saat diprint (Kop Surat, Tabel Bergaris, Tanda Tangan & Fit 1 Halaman A4)"
           >
             <FileSpreadsheet className="w-4 h-4" />
-            <span>Export Excel</span>
+            <span>Export Excel (Siap Print Seperti Word)</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleExportWordRecap}
+            disabled={filteredSubmissions.length === 0}
+            className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-semibold text-xs flex items-center gap-1.5 transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-2xs cursor-pointer"
+            title="Download file Rekap Nilai dalam format Microsoft Word (.doc)"
+          >
+            <FileText className="w-4 h-4" />
+            <span>Export Word (.doc)</span>
           </button>
 
           <button
             type="button"
             onClick={handlePrint}
-            className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-900 active:scale-95 text-white font-semibold text-xs flex items-center gap-1.5 transition-all shadow-2xs cursor-pointer"
-            title="Cetak Laporan Penilaian"
+            disabled={filteredSubmissions.length === 0}
+            className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-900 active:scale-95 text-white font-semibold text-xs flex items-center gap-1.5 transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-2xs cursor-pointer"
+            title="Pratinjau & Cetak Laporan Penilaian (Tampilan Kertas Word / Excel Siap Print)"
           >
             <Printer className="w-4 h-4" />
-            <span className="hidden sm:inline">Cetak Laporan</span>
+            <span>Cetak Laporan</span>
           </button>
         </div>
       </div>
@@ -1018,7 +1087,42 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
             </div>
 
             {/* Seed & Clear Data Actions */}
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              {/* View Mode Toggle: Tabel Dashboard vs Tampilan Kertas Cetak (Excel/Word) */}
+              <div className="inline-flex items-center p-1 rounded-xl bg-slate-100 border border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => {
+                    playClickSound();
+                    setRecapViewMode('table');
+                  }}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                    recapViewMode === 'table'
+                      ? 'bg-white text-slate-900 shadow-2xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <Table className="w-3.5 h-3.5 text-amber-600" />
+                  <span>Tabel Dashboard</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    playClickSound();
+                    setRecapViewMode('word_print');
+                  }}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                    recapViewMode === 'word_print'
+                      ? 'bg-emerald-600 text-white shadow-2xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                  title="Lihat tampilan lembar kerja Excel yang sudah disesuaikan seperti dokumen Word saat diprint"
+                >
+                  <FileSpreadsheet className="w-3.5 h-3.5" />
+                  <span>Tampilan Cetak Excel/Word</span>
+                </button>
+              </div>
+
               <button
                 type="button"
                 onClick={() => {
@@ -1058,6 +1162,87 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
             </div>
           </div>
 
+          {/* Print-Ready Excel / Word Format Controls Bar */}
+          {filteredSubmissions.length > 0 && (
+            <div className="bg-emerald-950 text-white px-4 py-3 rounded-2xl border border-emerald-800 shadow-xs flex flex-col lg:flex-row items-start lg:items-center justify-between gap-3 text-xs">
+              <div className="flex items-start sm:items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-emerald-500 text-slate-950 flex items-center justify-center shrink-0 font-black">
+                  <FileSpreadsheet className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="font-bold text-emerald-300 flex items-center gap-2 flex-wrap">
+                    <span>Format Excel Disesuaikan Seperti Dokumen Word Saat Diprint (A4 Fit-to-Page)</span>
+                  </div>
+                  <p className="text-[11px] text-emerald-100/80 mt-0.5">
+                    Dilengkapi Kop Surat Resmi, Identitas 2 Kolom, Tabel Bergaris Hitam Tegas, Baris Rata-rata &amp; Ketuntasan, serta Tanda Tangan Kepala Sekolah &amp; Guru Mapel.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto justify-end shrink-0">
+                <select
+                  value={recapIsLandscape ? 'landscape' : 'portrait'}
+                  onChange={(e) => setRecapIsLandscape(e.target.value === 'landscape')}
+                  className="px-2.5 py-1.5 rounded-lg bg-emerald-900 text-white border border-emerald-700 font-bold text-[11px] cursor-pointer outline-hidden"
+                  title="Pilih orientasi kertas saat diprint di Excel/Word"
+                >
+                  <option value="portrait">Kertas: Portrait (Tegak Seperti Word)</option>
+                  <option value="landscape">Kertas: Landscape (Mendatar)</option>
+                </select>
+
+                <select
+                  value={recapPaperSize}
+                  onChange={(e) => setRecapPaperSize(e.target.value as 'A4' | 'F4' | 'Letter')}
+                  className="px-2.5 py-1.5 rounded-lg bg-emerald-900 text-white border border-emerald-700 font-bold text-[11px] cursor-pointer outline-hidden"
+                  title="Pilih ukuran kertas cetak"
+                >
+                  <option value="A4">Ukuran A4</option>
+                  <option value="F4">Ukuran F4 / Folio</option>
+                  <option value="Letter">Ukuran Letter</option>
+                </select>
+
+                <button
+                  type="button"
+                  onClick={() => setRecapIncludeQuestionCols((prev) => !prev)}
+                  className={`px-2.5 py-1.5 rounded-lg border font-bold text-[11px] transition-colors cursor-pointer ${
+                    recapIncludeQuestionCols
+                      ? 'bg-amber-400 text-slate-950 border-amber-300'
+                      : 'bg-emerald-900 text-emerald-100 border-emerald-700 hover:bg-emerald-800'
+                  }`}
+                >
+                  {recapIncludeQuestionCols ? '✓ + Kolom Soal S1-S10' : '+ Kolom Soal S1-S10'}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleExportExcelWordStyle}
+                  className="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-[11px] flex items-center gap-1.5 transition-all cursor-pointer shadow-2xs"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Unduh Excel (.xls)</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleExportWordRecap}
+                  className="px-3 py-1.5 rounded-lg bg-blue-500 hover:bg-blue-400 text-white font-black text-[11px] flex items-center gap-1.5 transition-all cursor-pointer shadow-2xs"
+                >
+                  <FileText className="w-3.5 h-3.5" />
+                  <span>Unduh Word (.doc)</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleExecuteDirectPrintRecap}
+                  className="px-3 py-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-[11px] flex items-center gap-1.5 transition-all cursor-pointer shadow-2xs"
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  <span>Print Sekarang</span>
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Student Table */}
           <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs">
             {filteredSubmissions.length === 0 ? (
@@ -1087,6 +1272,240 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                     <PlusCircle className="w-4 h-4" />
                     <span>Muat Data Simulasi Karakter Buku</span>
                   </button>
+                </div>
+              </div>
+            ) : recapViewMode === 'word_print' ? (
+              /* WORD-STYLE PRINTABLE EXCEL SHEET PREVIEW */
+              <div className="bg-slate-200/70 p-4 sm:p-8 overflow-x-auto">
+                <div
+                  className={`bg-white mx-auto shadow-xl border border-slate-400 p-6 sm:p-10 text-black ${
+                    recapIsLandscape ? 'max-w-5xl' : 'max-w-3xl'
+                  }`}
+                  style={{ fontFamily: '"Times New Roman", "Calibri", Georgia, serif' }}
+                >
+                  {/* Kop Surat Resmi Seperti Microsoft Word */}
+                  <div className="text-center border-b-4 border-double border-black pb-3 mb-4">
+                    <div className="text-[11px] sm:text-xs font-bold uppercase tracking-wider">
+                      Dokumen Administrasi Penilaian Pembelajaran Kurikulum Merdeka
+                    </div>
+                    <h2 className="text-base sm:text-lg font-bold uppercase mt-0.5">
+                      Daftar Rekapitulasi Nilai Kuis Bahasa Inggris Siswa
+                    </h2>
+                    <div className="text-xs sm:text-sm font-bold mt-0.5">
+                      SMP / MTs Kelas VII &bull; Buku Siswa: English for Nusantara
+                    </div>
+                    <p className="text-[11px] italic mt-0.5">
+                      Topik / Materi: {QUIZ_METADATA.topic} &bull; Standar Ketuntasan Minimal (KKM): {QUIZ_METADATA.passingScore}
+                    </p>
+                  </div>
+
+                  {/* Identitas Dokumen 2 Kolom Seperti Word */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs mb-4">
+                    <div className="space-y-1">
+                      <div className="flex">
+                        <span className="w-32 font-bold shrink-0">Mata Pelajaran</span>
+                        <span>: Bahasa Inggris (Kelas VII SMP/MTs)</span>
+                      </div>
+                      <div className="flex">
+                        <span className="w-32 font-bold shrink-0">Judul Evaluasi</span>
+                        <span>: {QUIZ_METADATA.title}</span>
+                      </div>
+                      <div className="flex">
+                        <span className="w-32 font-bold shrink-0">Kelas / Rombel</span>
+                        <span className="font-bold">
+                          : {selectedClass === 'ALL' ? 'Semua Kelas (7A s.d. 7H)' : `Kelas ${selectedClass}`}
+                        </span>
+                      </div>
+                      <div className="flex">
+                        <span className="w-32 font-bold shrink-0">Guru Pengampu</span>
+                        <span className="font-bold">: {QUIZ_METADATA.teacherName}</span>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <div className="flex">
+                        <span className="w-32 font-bold shrink-0">Tanggal Cetak</span>
+                        <span>
+                          :{' '}
+                          {new Date().toLocaleDateString('id-ID', {
+                            weekday: 'long',
+                            year: 'numeric',
+                            month: 'long',
+                            day: 'numeric',
+                          })}
+                        </span>
+                      </div>
+                      <div className="flex">
+                        <span className="w-32 font-bold shrink-0">Jumlah Peserta</span>
+                        <span className="font-bold">: {filteredStats.total} Siswa</span>
+                      </div>
+                      <div className="flex">
+                        <span className="w-32 font-bold shrink-0">Rata-Rata Kelas</span>
+                        <span className="font-bold">
+                          : {filteredStats.avgScore} (Tertinggi: {filteredStats.highest} &bull; Terendah: {filteredStats.lowest})
+                        </span>
+                      </div>
+                      <div className="flex">
+                        <span className="w-32 font-bold shrink-0">Ketuntasan KKM</span>
+                        <span className="font-bold">
+                          : {filteredStats.passedPercent}% ({filteredStats.passedCount} Tuntas /{' '}
+                          {Math.max(0, filteredStats.total - filteredStats.passedCount)} Remedial)
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Tabel Daftar Nilai Bergaris Hitam Tegas Seperti Word */}
+                  <div className="overflow-x-auto">
+                    <table className="w-full border-collapse border border-black text-xs">
+                      <thead>
+                        <tr className="bg-slate-200 text-black font-bold uppercase text-[11px]">
+                          <th className="border border-black py-2 px-2 text-center w-9">No</th>
+                          <th className="border border-black py-2 px-2 text-center w-14">Absen</th>
+                          <th className="border border-black py-2 px-3 text-left">Nama Lengkap Siswa</th>
+                          <th className="border border-black py-2 px-2 text-center w-14">Kelas</th>
+                          <th className="border border-black py-2 px-2 text-center w-12">Benar</th>
+                          <th className="border border-black py-2 px-2 text-center w-12">Salah</th>
+                          <th className="border border-black py-2 px-2 text-center w-16">Nilai Akhir</th>
+                          <th className="border border-black py-2 px-2 text-center w-24">Keterangan</th>
+                          <th className="border border-black py-2 px-2 text-center w-16">Durasi</th>
+                          <th className="border border-black py-2 px-2 text-center w-24">Tanggal</th>
+                          {recapIncludeQuestionCols &&
+                            activeQuestions.map((q, i) => (
+                              <th key={q.id} className="border border-black py-1.5 px-1 text-center text-[10px]">
+                                S{i + 1}
+                                <br />({q.correctAnswer})
+                              </th>
+                            ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredSubmissions.map((sub, idx) => {
+                          const isPass = sub.score >= QUIZ_METADATA.passingScore;
+                          const durMins = Math.floor((sub.timeSpentSeconds || 0) / 60);
+                          const durSecs = (sub.timeSpentSeconds || 0) % 60;
+                          const dateStr = sub.submittedAt
+                            ? new Date(sub.submittedAt).toLocaleDateString('id-ID', {
+                                day: '2-digit',
+                                month: 'short',
+                                year: 'numeric',
+                              })
+                            : '-';
+
+                          return (
+                            <tr key={sub.id}>
+                              <td className="border border-black py-1.5 px-2 text-center">{idx + 1}</td>
+                              <td className="border border-black py-1.5 px-2 text-center font-bold">
+                                {sub.studentNumber}
+                              </td>
+                              <td className="border border-black py-1.5 px-3 font-bold">
+                                {sub.studentName}
+                              </td>
+                              <td className="border border-black py-1.5 px-2 text-center">
+                                {sub.studentClass}
+                              </td>
+                              <td className="border border-black py-1.5 px-2 text-center">
+                                {sub.correctCount}
+                              </td>
+                              <td className="border border-black py-1.5 px-2 text-center">
+                                {sub.wrongCount}
+                              </td>
+                              <td
+                                className={`border border-black py-1.5 px-2 text-center font-bold ${
+                                  isPass ? 'bg-emerald-50 text-emerald-950' : 'bg-rose-50 text-rose-950'
+                                }`}
+                              >
+                                {sub.score}
+                              </td>
+                              <td
+                                className={`border border-black py-1.5 px-2 text-center font-bold text-[11px] ${
+                                  isPass ? 'bg-emerald-50 text-emerald-900' : 'bg-rose-50 text-rose-900'
+                                }`}
+                              >
+                                {isPass ? 'TUNTAS' : 'BELUM TUNTAS'}
+                              </td>
+                              <td className="border border-black py-1.5 px-2 text-center">
+                                {durMins}m {durSecs}s
+                              </td>
+                              <td className="border border-black py-1.5 px-2 text-center">{dateStr}</td>
+                              {recapIncludeQuestionCols &&
+                                activeQuestions.map((q) => {
+                                  const ans = sub.answers?.[q.id] || '-';
+                                  const isCorrect = ans === q.correctAnswer;
+                                  return (
+                                    <td
+                                      key={q.id}
+                                      className={`border border-black py-1 px-1 text-center font-bold text-[11px] ${
+                                        isCorrect ? 'text-emerald-800' : 'text-rose-700'
+                                      }`}
+                                    >
+                                      {ans}
+                                    </td>
+                                  );
+                                })}
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                      <tfoot>
+                        <tr className="bg-slate-100 font-bold">
+                          <td colSpan={6} className="border border-black py-1.5 px-3 text-right">
+                            RATA-RATA NILAI KELAS :
+                          </td>
+                          <td className="border border-black py-1.5 px-2 text-center text-sm">
+                            {filteredStats.avgScore}
+                          </td>
+                          <td
+                            colSpan={3 + (recapIncludeQuestionCols ? activeQuestions.length : 0)}
+                            className="border border-black py-1.5 px-3 text-left"
+                          >
+                            Ketuntasan (KKM &ge; {QUIZ_METADATA.passingScore}): {filteredStats.passedPercent}% (
+                            {filteredStats.passedCount} dari {filteredStats.total} Siswa Tuntas)
+                          </td>
+                        </tr>
+                        <tr className="bg-slate-100 font-bold">
+                          <td colSpan={6} className="border border-black py-1.5 px-3 text-right">
+                            NILAI TERTINGGI / NILAI TERENDAH :
+                          </td>
+                          <td className="border border-black py-1.5 px-2 text-center">
+                            {filteredStats.highest} / {filteredStats.lowest}
+                          </td>
+                          <td
+                            colSpan={3 + (recapIncludeQuestionCols ? activeQuestions.length : 0)}
+                            className="border border-black py-1.5 px-3 text-left"
+                          >
+                            Tuntas: {filteredStats.passedCount} Siswa &bull; Belum Tuntas (Remedial):{' '}
+                            {Math.max(0, filteredStats.total - filteredStats.passedCount)} Siswa
+                          </td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+
+                  {/* Blok Tanda Tangan 2 Kolom Seperti Word */}
+                  <div className="grid grid-cols-2 gap-6 text-center text-xs mt-6 pt-2">
+                    <div>
+                      <p>Mengetahui,</p>
+                      <p className="font-bold">Kepala Sekolah / Wali Kelas</p>
+                      <div className="h-14" />
+                      <p className="font-bold underline">( .................................................. )</p>
+                      <p className="text-[11px]">NIP. ..................................................</p>
+                    </div>
+                    <div>
+                      <p>
+                        {new Date().toLocaleDateString('id-ID', {
+                          weekday: 'long',
+                          year: 'numeric',
+                          month: 'long',
+                          day: 'numeric',
+                        })}
+                      </p>
+                      <p className="font-bold">Guru Mata Pelajaran Bahasa Inggris,</p>
+                      <div className="h-14" />
+                      <p className="font-bold underline">{QUIZ_METADATA.teacherName}</p>
+                      <p className="text-[11px]">{QUIZ_METADATA.branding}</p>
+                    </div>
+                  </div>
                 </div>
               </div>
             ) : (
@@ -2449,6 +2868,358 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
             <CheckCircle2 className="w-5 h-5 text-amber-400 shrink-0" />
             <span className="leading-snug">{questionBankToastMsg}</span>
           </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Modal: Pratinjau Cetak & Export Excel/Word (Tampilan Seperti Word Saat Diprint) */}
+      <AnimatePresence>
+        {isRecapPrintModalOpen && (
+          <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 overflow-y-auto">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white rounded-2xl sm:rounded-3xl max-w-5xl w-full max-h-[94vh] flex flex-col shadow-2xl border border-slate-200 overflow-hidden"
+            >
+              {/* Modal Top Header */}
+              <div className="p-4 sm:p-5 bg-slate-900 text-white flex items-center justify-between gap-3 shrink-0">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-emerald-500 text-slate-950 flex items-center justify-center shrink-0">
+                    <Printer className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="font-extrabold text-sm sm:text-base text-white">
+                      Pratinjau Cetak &amp; Export Excel / Word (Tampilan Seperti Word Saat Diprint)
+                    </h3>
+                    <p className="text-[11px] sm:text-xs text-slate-300 mt-0.5">
+                      File Excel (.xls) &amp; Cetakan diatur otomatis Fit 1 Halaman A4 dengan Kop Surat, Tabel Bergaris, dan Tanda Tangan Resmi
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setIsRecapPrintModalOpen(false)}
+                  className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs cursor-pointer"
+                >
+                  ✕ Tutup
+                </button>
+              </div>
+
+              {/* Options & Action Toolbar */}
+              <div className="p-3.5 sm:p-4 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 shrink-0 text-xs">
+                <div className="flex flex-wrap items-center gap-2">
+                  <select
+                    value={recapIsLandscape ? 'landscape' : 'portrait'}
+                    onChange={(e) => setRecapIsLandscape(e.target.value === 'landscape')}
+                    className="px-2.5 py-1.5 rounded-lg bg-white border border-slate-300 font-bold text-slate-800 cursor-pointer"
+                  >
+                    <option value="portrait">Orientasi: Portrait (Tegak Seperti Word)</option>
+                    <option value="landscape">Orientasi: Landscape (Mendatar)</option>
+                  </select>
+
+                  <select
+                    value={recapPaperSize}
+                    onChange={(e) => setRecapPaperSize(e.target.value as 'A4' | 'F4' | 'Letter')}
+                    className="px-2.5 py-1.5 rounded-lg bg-white border border-slate-300 font-bold text-slate-800 cursor-pointer"
+                  >
+                    <option value="A4">Kertas: A4 (210×297 mm)</option>
+                    <option value="F4">Kertas: F4 / Folio (215×330 mm)</option>
+                    <option value="Letter">Kertas: Letter</option>
+                  </select>
+
+                  <select
+                    value={recapColorMode}
+                    onChange={(e) => setRecapColorMode(e.target.value as 'color' | 'grayscale')}
+                    className="px-2.5 py-1.5 rounded-lg bg-white border border-slate-300 font-bold text-slate-800 cursor-pointer"
+                  >
+                    <option value="color">Warna: Berwarna Resmi</option>
+                    <option value="grayscale">Warna: Hitam-Putih (Hemat Tinta)</option>
+                  </select>
+
+                  <button
+                    type="button"
+                    onClick={() => setRecapIncludeQuestionCols((prev) => !prev)}
+                    className={`px-2.5 py-1.5 rounded-lg border font-bold transition-colors cursor-pointer ${
+                      recapIncludeQuestionCols
+                        ? 'bg-amber-500 text-slate-950 border-amber-500'
+                        : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+                    }`}
+                  >
+                    {recapIncludeQuestionCols ? '✓ Kolom S1-S10 Aktif' : '+ Tampilkan Kolom S1-S10'}
+                  </button>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleExportExcelWordStyle}
+                    className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold flex items-center gap-1.5 shadow-2xs cursor-pointer"
+                  >
+                    <FileSpreadsheet className="w-4 h-4" />
+                    <span>Download Excel (.xls Siap Print)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleExportWordRecap}
+                    className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold flex items-center gap-1.5 shadow-2xs cursor-pointer"
+                  >
+                    <FileText className="w-4 h-4" />
+                    <span>Download Word (.doc)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleExportCSV}
+                    className="px-3 py-2 rounded-xl bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 font-bold flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>CSV</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleExecuteDirectPrintRecap}
+                    className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-950 font-black flex items-center gap-1.5 shadow-xs cursor-pointer"
+                  >
+                    <Printer className="w-4 h-4" />
+                    <span>Cetak Sekarang (Printer / PDF)</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Live Word-Style Sheet Preview Body */}
+              <div className="p-4 sm:p-6 bg-slate-200/80 overflow-y-auto flex-1">
+                <div
+                  className={`bg-white mx-auto shadow-xl border border-slate-400 p-6 sm:p-10 text-black ${
+                    recapIsLandscape ? 'max-w-5xl' : 'max-w-3xl'
+                  } ${recapColorMode === 'grayscale' ? 'grayscale' : ''}`}
+                  style={{ fontFamily: '"Times New Roman", "Calibri", Georgia, serif' }}
+                >
+                  <div className="text-center border-b-4 border-double border-black pb-3 mb-4">
+                    <div className="text-[11px] sm:text-xs font-bold uppercase tracking-wider">
+                      Dokumen Administrasi Penilaian Pembelajaran Kurikulum Merdeka
+                    </div>
+                    <h2 className="text-base sm:text-lg font-bold uppercase mt-0.5">
+                      Daftar Rekapitulasi Nilai Kuis Bahasa Inggris Siswa
+                    </h2>
+                    <div className="text-xs sm:text-sm font-bold mt-0.5">
+                      SMP / MTs Kelas VII &bull; Buku Siswa: English for Nusantara
+                    </div>
+                    <p className="text-[11px] italic mt-0.5">
+                      Topik / Materi: {QUIZ_METADATA.topic} &bull; Standar Ketuntasan Minimal (KKM): {QUIZ_METADATA.passingScore}
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs mb-4">
+                    <div className="space-y-1">
+                      <div className="flex">
+                        <span className="w-32 font-bold shrink-0">Mata Pelajaran</span>
+                        <span>: Bahasa Inggris (Kelas VII SMP/MTs)</span>
+                      </div>
+                      <div className="flex">
+                        <span className="w-32 font-bold shrink-0">Judul Evaluasi</span>
+                        <span>: {QUIZ_METADATA.title}</span>
+                      </div>
+                      <div className="flex">
+                        <span className="w-32 font-bold shrink-0">Kelas / Rombel</span>
+                        <span className="font-bold">
+                          : {selectedClass === 'ALL' ? 'Semua Kelas (7A s.d. 7H)' : `Kelas ${selectedClass}`}
+                        </span>
+                      </div>
+                      <div className="flex">
+                        <span className="w-32 font-bold shrink-0">Guru Pengampu</span>
+                        <span className="font-bold">: {QUIZ_METADATA.teacherName}</span>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <div className="flex">
+                        <span className="w-32 font-bold shrink-0">Tanggal Cetak</span>
+                        <span>
+                          :{' '}
+                          {new Date().toLocaleDateString('id-ID', {
+                            weekday: 'long',
+                            year: 'numeric',
+                            month: 'long',
+                            day: 'numeric',
+                          })}
+                        </span>
+                      </div>
+                      <div className="flex">
+                        <span className="w-32 font-bold shrink-0">Jumlah Peserta</span>
+                        <span className="font-bold">: {filteredStats.total} Siswa</span>
+                      </div>
+                      <div className="flex">
+                        <span className="w-32 font-bold shrink-0">Rata-Rata Kelas</span>
+                        <span className="font-bold">
+                          : {filteredStats.avgScore} (Tertinggi: {filteredStats.highest} &bull; Terendah: {filteredStats.lowest})
+                        </span>
+                      </div>
+                      <div className="flex">
+                        <span className="w-32 font-bold shrink-0">Ketuntasan KKM</span>
+                        <span className="font-bold">
+                          : {filteredStats.passedPercent}% ({filteredStats.passedCount} Tuntas /{' '}
+                          {Math.max(0, filteredStats.total - filteredStats.passedCount)} Remedial)
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="overflow-x-auto">
+                    <table className="w-full border-collapse border border-black text-xs">
+                      <thead>
+                        <tr className="bg-slate-200 text-black font-bold uppercase text-[11px]">
+                          <th className="border border-black py-2 px-2 text-center w-9">No</th>
+                          <th className="border border-black py-2 px-2 text-center w-14">Absen</th>
+                          <th className="border border-black py-2 px-3 text-left">Nama Lengkap Siswa</th>
+                          <th className="border border-black py-2 px-2 text-center w-14">Kelas</th>
+                          <th className="border border-black py-2 px-2 text-center w-12">Benar</th>
+                          <th className="border border-black py-2 px-2 text-center w-12">Salah</th>
+                          <th className="border border-black py-2 px-2 text-center w-16">Nilai Akhir</th>
+                          <th className="border border-black py-2 px-2 text-center w-24">Keterangan</th>
+                          <th className="border border-black py-2 px-2 text-center w-16">Durasi</th>
+                          <th className="border border-black py-2 px-2 text-center w-24">Tanggal</th>
+                          {recapIncludeQuestionCols &&
+                            activeQuestions.map((q, i) => (
+                              <th key={q.id} className="border border-black py-1.5 px-1 text-center text-[10px]">
+                                S{i + 1}
+                                <br />({q.correctAnswer})
+                              </th>
+                            ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredSubmissions.map((sub, idx) => {
+                          const isPass = sub.score >= QUIZ_METADATA.passingScore;
+                          const durMins = Math.floor((sub.timeSpentSeconds || 0) / 60);
+                          const durSecs = (sub.timeSpentSeconds || 0) % 60;
+                          const dateStr = sub.submittedAt
+                            ? new Date(sub.submittedAt).toLocaleDateString('id-ID', {
+                                day: '2-digit',
+                                month: 'short',
+                                year: 'numeric',
+                              })
+                            : '-';
+
+                          return (
+                            <tr key={sub.id}>
+                              <td className="border border-black py-1.5 px-2 text-center">{idx + 1}</td>
+                              <td className="border border-black py-1.5 px-2 text-center font-bold">
+                                {sub.studentNumber}
+                              </td>
+                              <td className="border border-black py-1.5 px-3 font-bold">
+                                {sub.studentName}
+                              </td>
+                              <td className="border border-black py-1.5 px-2 text-center">
+                                {sub.studentClass}
+                              </td>
+                              <td className="border border-black py-1.5 px-2 text-center">
+                                {sub.correctCount}
+                              </td>
+                              <td className="border border-black py-1.5 px-2 text-center">
+                                {sub.wrongCount}
+                              </td>
+                              <td
+                                className={`border border-black py-1.5 px-2 text-center font-bold ${
+                                  isPass ? 'bg-emerald-50 text-emerald-950' : 'bg-rose-50 text-rose-950'
+                                }`}
+                              >
+                                {sub.score}
+                              </td>
+                              <td
+                                className={`border border-black py-1.5 px-2 text-center font-bold text-[11px] ${
+                                  isPass ? 'bg-emerald-50 text-emerald-900' : 'bg-rose-50 text-rose-900'
+                                }`}
+                              >
+                                {isPass ? 'TUNTAS' : 'BELUM TUNTAS'}
+                              </td>
+                              <td className="border border-black py-1.5 px-2 text-center">
+                                {durMins}m {durSecs}s
+                              </td>
+                              <td className="border border-black py-1.5 px-2 text-center">{dateStr}</td>
+                              {recapIncludeQuestionCols &&
+                                activeQuestions.map((q) => {
+                                  const ans = sub.answers?.[q.id] || '-';
+                                  const isCorrect = ans === q.correctAnswer;
+                                  return (
+                                    <td
+                                      key={q.id}
+                                      className={`border border-black py-1 px-1 text-center font-bold text-[11px] ${
+                                        isCorrect ? 'text-emerald-800' : 'text-rose-700'
+                                      }`}
+                                    >
+                                      {ans}
+                                    </td>
+                                  );
+                                })}
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                      <tfoot>
+                        <tr className="bg-slate-100 font-bold">
+                          <td colSpan={6} className="border border-black py-1.5 px-3 text-right">
+                            RATA-RATA NILAI KELAS :
+                          </td>
+                          <td className="border border-black py-1.5 px-2 text-center text-sm">
+                            {filteredStats.avgScore}
+                          </td>
+                          <td
+                            colSpan={3 + (recapIncludeQuestionCols ? activeQuestions.length : 0)}
+                            className="border border-black py-1.5 px-3 text-left"
+                          >
+                            Ketuntasan (KKM &ge; {QUIZ_METADATA.passingScore}): {filteredStats.passedPercent}% (
+                            {filteredStats.passedCount} dari {filteredStats.total} Siswa Tuntas)
+                          </td>
+                        </tr>
+                        <tr className="bg-slate-100 font-bold">
+                          <td colSpan={6} className="border border-black py-1.5 px-3 text-right">
+                            NILAI TERTINGGI / NILAI TERENDAH :
+                          </td>
+                          <td className="border border-black py-1.5 px-2 text-center">
+                            {filteredStats.highest} / {filteredStats.lowest}
+                          </td>
+                          <td
+                            colSpan={3 + (recapIncludeQuestionCols ? activeQuestions.length : 0)}
+                            className="border border-black py-1.5 px-3 text-left"
+                          >
+                            Tuntas: {filteredStats.passedCount} Siswa &bull; Belum Tuntas (Remedial):{' '}
+                            {Math.max(0, filteredStats.total - filteredStats.passedCount)} Siswa
+                          </td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-6 text-center text-xs mt-6 pt-2">
+                    <div>
+                      <p>Mengetahui,</p>
+                      <p className="font-bold">Kepala Sekolah / Wali Kelas</p>
+                      <div className="h-14" />
+                      <p className="font-bold underline">( .................................................. )</p>
+                      <p className="text-[11px]">NIP. ..................................................</p>
+                    </div>
+                    <div>
+                      <p>
+                        {new Date().toLocaleDateString('id-ID', {
+                          weekday: 'long',
+                          year: 'numeric',
+                          month: 'long',
+                          day: 'numeric',
+                        })}
+                      </p>
+                      <p className="font-bold">Guru Mata Pelajaran Bahasa Inggris,</p>
+                      <div className="h-14" />
+                      <p className="font-bold underline">{QUIZ_METADATA.teacherName}</p>
+                      <p className="text-[11px]">{QUIZ_METADATA.branding}</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          </div>
         )}
       </AnimatePresence>
     </div>

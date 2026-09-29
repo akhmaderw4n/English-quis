@@ -24,6 +24,8 @@ export const INITIAL_STUDENT_RESTRICTION_CONFIG: StudentRestrictionConfig = {
   viewedStudyModuleMap: {},
   registeredStudents: INITIAL_REGISTERED_STUDENTS,
   enforceRegisteredDatabase: false,
+  antiScreenshotMobile: true,
+  antiScreenshotMode: 'touch_hold',
 };
 
 export function normalizeStudentName(name: string | undefined | null): string {

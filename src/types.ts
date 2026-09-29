@@ -125,6 +125,8 @@ export interface StudentRestrictionConfig {
   viewedStudyModuleMap?: Record<string, string>; // sinkronisasi cloud 1x lihat modul ajar
   registeredStudents?: RegisteredStudent[]; // Database resmi siswa/guru per kelas
   enforceRegisteredDatabase?: boolean; // true = wajib terdata di database siswa/guru untuk mengerjakan
+  antiScreenshotMobile?: boolean; // true = mode tidak bisa di-screenshot di HP siswa aktif
+  antiScreenshotMode?: 'touch_hold' | 'auto_sensor' | 'off'; // 'touch_hold' = tahan 1 jari untuk baca + sensor 3 jari, 'auto_sensor' = sensor 3 jari & fokus otomatis
   updatedAt?: string;
 }
 

@@ -15,7 +15,8 @@ import {
   EyeOff,
   Clock,
   ShieldCheck,
-  AlertTriangle
+  AlertTriangle,
+  Smartphone
 } from 'lucide-react';
 import { StudentInfo, StudentRestrictionConfig, QuizSubmission } from '../types';
 import { QUIZ_METADATA, INITIAL_STUDENT_RESTRICTION_CONFIG, getStudentAttemptStatus } from '../data/quizData';
@@ -236,6 +237,15 @@ export const StartScreen: React.FC<StartScreenProps> = ({
               {restrictions.isQuizOpen ? 'Dibuka' : 'Ditutup'}
             </strong>
           </span>
+          {(restrictions.antiScreenshotMode ?? 'touch_hold') !== 'off' && (
+            <>
+              <span aria-hidden="true">&bull;</span>
+              <span className="inline-flex items-center gap-1 text-emerald-800 font-bold">
+                <Smartphone className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                <span>Mode Anti-Screenshot HP: Aktif</span>
+              </span>
+            </>
+          )}
         </div>
       </motion.div>
 

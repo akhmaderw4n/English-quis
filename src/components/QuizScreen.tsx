@@ -20,11 +20,15 @@ import {
   Headphones,
   ShieldAlert,
   ShieldCheck,
+  Smartphone,
+  Fingerprint,
+  EyeOff,
+  Lock,
   X
 } from 'lucide-react';
 import { Question, StudentInfo } from '../types';
 import { QUIZ_QUESTIONS, QUIZ_METADATA } from '../data/quizData';
-import { playClickSound, speakEnglish, stopSpeech } from '../utils/audio';
+import { playClickSound, speakEnglish, stopSpeech, playViolationAlertSound } from '../utils/audio';
 
 interface QuizScreenProps {
   questions?: Question[];
@@ -48,6 +52,7 @@ interface QuizScreenProps {
   resumedBannerNotice?: boolean;
   timeLimitMinutes?: number;
   shuffleQuestions?: boolean;
+  antiScreenshotMode?: 'touch_hold' | 'auto_sensor' | 'off';
 }
 
 export const QuizScreen: React.FC<QuizScreenProps> = ({
@@ -66,6 +71,7 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
   resumedBannerNotice = false,
   timeLimitMinutes = 0,
   shuffleQuestions = true,
+  antiScreenshotMode = 'touch_hold',
 }) => {
   const draftStorageKey = `en_nusantara_quiz_draft_${student.studentClass.trim().toUpperCase()}_${student.studentNumber.trim()}_${student.name.trim().toLowerCase()}`;
 
@@ -169,16 +175,62 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
   const [speechRate, setSpeechRate] = useState<number>(0.80);
   const [autoPlayAudio, setAutoPlayAudio] = useState<boolean>(true);
 
-  // Anti-Curang CBT state (sends notification to teacher dashboard when tab is switched, without locking student screen)
-  const [antiCheatEnabled, setAntiCheatEnabled] = useState(true);
+  // Anti-Curang CBT & Mode Anti-Screenshot HP Siswa states
+  const [antiCheatEnabled] = useState(true);
+  const isAntiScreenshotEnabled = antiScreenshotMode !== 'off';
+  const isTouchHoldMode = antiScreenshotMode === 'touch_hold';
 
-  // Tab-switch violation detection (sends notification to Teacher Dashboard)
+  const questionGuardRef = useRef<HTMLDivElement | null>(null);
+  const [isHoldingSingleFinger, setIsHoldingSingleFinger] = useState(false);
+  const [screenshotBlockState, setScreenshotBlockState] = useState<{
+    isLocked: boolean;
+    reason: string;
+    blockedCount: number;
+    cooldownSeconds: number;
+  }>({
+    isLocked: false,
+    reason: '',
+    blockedCount: 0,
+    cooldownSeconds: 0,
+  });
+  const lastViolationReportTsRef = useRef<number>(0);
+
+  // Cooldown countdown for Screenshot Blackout Lock Screen
   useEffect(() => {
-    if (!antiCheatEnabled) return;
+    if (!screenshotBlockState.isLocked || screenshotBlockState.cooldownSeconds <= 0) return;
+    const t = setInterval(() => {
+      setScreenshotBlockState((prev) => ({
+        ...prev,
+        cooldownSeconds: Math.max(0, prev.cooldownSeconds - 1),
+      }));
+    }, 1000);
+    return () => clearInterval(t);
+  }, [screenshotBlockState.isLocked, screenshotBlockState.cooldownSeconds]);
 
-    const reportViolation = (reason: string) => {
+  // Clean up body blackout class on unmount
+  useEffect(() => {
+    return () => {
+      document.body.classList.remove('anti-screenshot-blackout');
+    };
+  }, []);
+
+  // Reset touch reveal when moving between question numbers
+  useEffect(() => {
+    questionGuardRef.current?.classList.remove('touch-reveal-active');
+    setIsHoldingSingleFinger(false);
+  }, [currentIndex]);
+
+  // Zero-Latency (0ms) Anti-Screenshot HP Siswa & Tab-Switch Violation Engine
+  useEffect(() => {
+    if (!antiCheatEnabled && !isAntiScreenshotEnabled) return;
+
+    const reportViolationDebounced = (reason: string) => {
       if (isSubmittedRef.current) return;
-      setViolationsCount(prev => prev + 1);
+      const now = Date.now();
+      if (now - lastViolationReportTsRef.current < 2200) return;
+      lastViolationReportTsRef.current = now;
+
+      setViolationsCount((prev) => prev + 1);
       onViolationOccurred?.({
         lastQuestionIndex: currentIndex,
         answers,
@@ -188,18 +240,240 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
       });
     };
 
-    const handleVisibility = () => {
-      if (document.hidden && !isSubmittedRef.current) {
-        reportViolation('Terdeteksi membuka tab lain atau meminimalkan browser');
+    const triggerInstantScreenshotBlackout = (reason: string, reportToTeacher: boolean = true) => {
+      if (isSubmittedRef.current || !isAntiScreenshotEnabled) return;
+      // 1. Synchronous 0ms DOM hiding before mobile OS framebuffer captures the screen
+      document.body.classList.add('anti-screenshot-blackout');
+      questionGuardRef.current?.classList.remove('touch-reveal-active');
+      setIsHoldingSingleFinger(false);
+
+      // 2. Haptic & sound alert + clear clipboard
+      try {
+        navigator.vibrate?.([200, 80, 200]);
+      } catch {}
+      try {
+        navigator.clipboard?.writeText?.('SCREENSHOT DIBLOKIR - MODE UJIAN HP SISWA').catch(() => {});
+      } catch {}
+      playViolationAlertSound();
+
+      // 3. Activate full-screen blackout lock state
+      setScreenshotBlockState((prev) => ({
+        isLocked: true,
+        reason,
+        blockedCount: prev.blockedCount + 1,
+        cooldownSeconds: 3,
+      }));
+
+      if (reportToTeacher) {
+        reportViolationDebounced(reason);
       }
     };
 
+    // 1. Multi-touch (2 or 3 fingers) gesture detection on mobile phone (3-finger swipe screenshot)
+    const handleGlobalTouchStart = (e: TouchEvent) => {
+      if (!isAntiScreenshotEnabled || isSubmittedRef.current) return;
+      if (e.touches && e.touches.length >= 2) {
+        if (e.cancelable) e.preventDefault();
+        triggerInstantScreenshotBlackout(
+          `Terdeteksi percobaan Screenshot HP (Sentuhan ${e.touches.length} Jari pada Soal No. ${currentIndex + 1})`,
+          true
+        );
+      }
+    };
+
+    const handleGlobalTouchMove = (e: TouchEvent) => {
+      if (!isAntiScreenshotEnabled || isSubmittedRef.current) return;
+      if (e.touches && e.touches.length >= 2) {
+        if (e.cancelable) e.preventDefault();
+        triggerInstantScreenshotBlackout(
+          `Terdeteksi gestur geser ${e.touches.length} Jari (Screenshot HP) pada Soal No. ${currentIndex + 1}`,
+          true
+        );
+      }
+    };
+
+    // 2. TouchCancel fires on Android/iOS when hardware Power+VolumeDown screenshot or system overlay interrupts touch
+    const handleGlobalTouchCancel = () => {
+      if (!isAntiScreenshotEnabled || isSubmittedRef.current) return;
+      questionGuardRef.current?.classList.remove('touch-reveal-active');
+      setIsHoldingSingleFinger(false);
+      triggerInstantScreenshotBlackout(
+        `Terdeteksi interupsi tombol fisik HP / tangkapan layar sistem pada Soal No. ${currentIndex + 1}`,
+        true
+      );
+    };
+
+    const handleGlobalTouchEnd = (e: TouchEvent) => {
+      if (!e.touches || e.touches.length === 0) {
+        questionGuardRef.current?.classList.remove('touch-reveal-active');
+        setIsHoldingSingleFinger(false);
+      }
+    };
+
+    // 3. Visibility & Window Blur (Notification shade pull-down, Control Center, Screen Recorder, Recent Apps)
+    const handleVisibility = () => {
+      if (document.hidden && !isSubmittedRef.current) {
+        if (isAntiScreenshotEnabled) {
+          document.body.classList.add('anti-screenshot-blackout');
+          questionGuardRef.current?.classList.remove('touch-reveal-active');
+          setIsHoldingSingleFinger(false);
+          setScreenshotBlockState((prev) => ({
+            isLocked: true,
+            reason: 'Layar otomatis dikunci karena aplikasi diminimalkan / panel layar HP dibuka',
+            blockedCount: prev.blockedCount + 1,
+            cooldownSeconds: 2,
+          }));
+        }
+        reportViolationDebounced('Terdeteksi membuka tab/aplikasi lain atau menarik panel sistem HP');
+      }
+    };
+
+    const handleWindowBlur = () => {
+      if (isSubmittedRef.current || !isAntiScreenshotEnabled) return;
+      document.body.classList.add('anti-screenshot-blackout');
+      questionGuardRef.current?.classList.remove('touch-reveal-active');
+      setIsHoldingSingleFinger(false);
+    };
+
+    const handleWindowFocus = () => {
+      if (!screenshotBlockState.isLocked) {
+        document.body.classList.remove('anti-screenshot-blackout');
+      }
+    };
+
+    // 4. Hardware/Keyboard Screenshot Keys & Print/Copy Shortcuts
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!isAntiScreenshotEnabled || isSubmittedRef.current) return;
+      const keyLower = (e.key || '').toLowerCase();
+
+      // Hold Spacebar on desktop/laptop to reveal question in touch_hold mode
+      if (e.code === 'Space' && isTouchHoldMode && !e.repeat) {
+        const activeTag = document.activeElement?.tagName.toLowerCase();
+        if (activeTag !== 'input' && activeTag !== 'textarea') {
+          e.preventDefault();
+          questionGuardRef.current?.classList.add('touch-reveal-active');
+          setIsHoldingSingleFinger(true);
+          return;
+        }
+      }
+
+      const isPrintScreen = e.key === 'PrintScreen' || e.keyCode === 44;
+      const isSystemCaptureShortcut =
+        ((e.metaKey || e.ctrlKey) && e.shiftKey && ['s', '3', '4', '5'].includes(keyLower)) ||
+        ((e.ctrlKey || e.metaKey) && ['p', 's', 'u', 'c'].includes(keyLower)) ||
+        e.key === 'AudioVolumeDown' ||
+        e.key === 'VolumeDown';
+
+      if (isPrintScreen || isSystemCaptureShortcut) {
+        e.preventDefault();
+        e.stopPropagation();
+        triggerInstantScreenshotBlackout(
+          `Terdeteksi tombol Screenshot / Pintasan Tangkap Layar (${e.key || 'Capture'})`,
+          true
+        );
+      }
+    };
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (!isAntiScreenshotEnabled || isSubmittedRef.current) return;
+      if (e.code === 'Space' && isTouchHoldMode) {
+        questionGuardRef.current?.classList.remove('touch-reveal-active');
+        setIsHoldingSingleFinger(false);
+      }
+      if (e.key === 'PrintScreen' || e.keyCode === 44) {
+        e.preventDefault();
+        triggerInstantScreenshotBlackout('Terdeteksi tombol PrintScreen / Tangkap Layar', true);
+      }
+    };
+
+    // 5. Block Long-Press Context Menu, Copy, Cut, Drag on Student Phone
+    const handleBlockCopyContext = (e: Event) => {
+      if (!isAntiScreenshotEnabled) return;
+      e.preventDefault();
+    };
+
+    window.addEventListener('touchstart', handleGlobalTouchStart, { capture: true, passive: false });
+    window.addEventListener('touchmove', handleGlobalTouchMove, { capture: true, passive: false });
+    window.addEventListener('touchcancel', handleGlobalTouchCancel, { capture: true });
+    window.addEventListener('touchend', handleGlobalTouchEnd, { capture: true });
+    window.addEventListener('blur', handleWindowBlur);
+    window.addEventListener('focus', handleWindowFocus);
+    window.addEventListener('keydown', handleKeyDown, { capture: true });
+    window.addEventListener('keyup', handleKeyUp, { capture: true });
     document.addEventListener('visibilitychange', handleVisibility);
+    document.addEventListener('contextmenu', handleBlockCopyContext);
+    document.addEventListener('copy', handleBlockCopyContext);
+    document.addEventListener('cut', handleBlockCopyContext);
 
     return () => {
+      window.removeEventListener('touchstart', handleGlobalTouchStart, { capture: true });
+      window.removeEventListener('touchmove', handleGlobalTouchMove, { capture: true });
+      window.removeEventListener('touchcancel', handleGlobalTouchCancel, { capture: true });
+      window.removeEventListener('touchend', handleGlobalTouchEnd, { capture: true });
+      window.removeEventListener('blur', handleWindowBlur);
+      window.removeEventListener('focus', handleWindowFocus);
+      window.removeEventListener('keydown', handleKeyDown, { capture: true });
+      window.removeEventListener('keyup', handleKeyUp, { capture: true });
       document.removeEventListener('visibilitychange', handleVisibility);
+      document.removeEventListener('contextmenu', handleBlockCopyContext);
+      document.removeEventListener('copy', handleBlockCopyContext);
+      document.removeEventListener('cut', handleBlockCopyContext);
     };
-  }, [antiCheatEnabled, currentIndex, answers, flagged, seconds, onViolationOccurred]);
+  }, [
+    antiCheatEnabled,
+    isAntiScreenshotEnabled,
+    isTouchHoldMode,
+    currentIndex,
+    answers,
+    flagged,
+    seconds,
+    onViolationOccurred,
+    screenshotBlockState.isLocked,
+  ]);
+
+  const handleDismissScreenshotLock = () => {
+    if (screenshotBlockState.cooldownSeconds > 0) return;
+    playClickSound();
+    document.body.classList.remove('anti-screenshot-blackout');
+    questionGuardRef.current?.classList.remove('touch-reveal-active');
+    setIsHoldingSingleFinger(false);
+    setScreenshotBlockState((prev) => ({
+      ...prev,
+      isLocked: false,
+    }));
+  };
+
+  // Synchronous 0ms handlers for 1-finger touch-hold on the Question Card
+  const handleCardTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (!isAntiScreenshotEnabled) return;
+    if (e.touches.length === 1) {
+      questionGuardRef.current?.classList.add('touch-reveal-active');
+      setIsHoldingSingleFinger(true);
+    } else if (e.touches.length >= 2) {
+      questionGuardRef.current?.classList.remove('touch-reveal-active');
+      setIsHoldingSingleFinger(false);
+    }
+  };
+
+  const handleCardTouchEnd = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (!isAntiScreenshotEnabled) return;
+    if (e.touches.length === 0) {
+      questionGuardRef.current?.classList.remove('touch-reveal-active');
+      setIsHoldingSingleFinger(false);
+    }
+  };
+
+  const handleCardMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!isAntiScreenshotEnabled || e.button !== 0) return;
+    questionGuardRef.current?.classList.add('touch-reveal-active');
+    setIsHoldingSingleFinger(true);
+  };
+
+  const handleCardMouseUpOrLeave = () => {
+    if (!isAntiScreenshotEnabled) return;
+    questionGuardRef.current?.classList.remove('touch-reveal-active');
+    setIsHoldingSingleFinger(false);
+  };
 
   // Timer & Auto-Submit when timeLimitMinutes is reached
   const maxSeconds = timeLimitMinutes > 0 ? timeLimitMinutes * 60 : 0;
@@ -396,7 +670,75 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
   }
 
   return (
-    <div className="py-4 sm:py-6 max-w-5xl mx-auto px-3 sm:px-6">
+    <div className={`py-4 sm:py-6 max-w-5xl mx-auto px-3 sm:px-6 ${isAntiScreenshotEnabled ? 'anti-screenshot-zone' : ''}`}>
+      {/* Full-Screen Emergency Anti-Screenshot Blackout Lock Overlay */}
+      <AnimatePresence>
+        {isAntiScreenshotEnabled && screenshotBlockState.isLocked && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.05 }}
+            className="fixed inset-0 z-[9999] bg-slate-950 text-white flex flex-col items-center justify-center p-5 text-center select-none"
+          >
+            <div className="max-w-md w-full bg-slate-900 border-2 border-rose-500/90 rounded-3xl p-6 sm:p-8 shadow-2xl space-y-4">
+              <div className="w-16 h-16 rounded-2xl bg-rose-600/20 border border-rose-500/50 text-rose-400 flex items-center justify-center mx-auto animate-pulse">
+                <ShieldAlert className="w-9 h-9" />
+              </div>
+
+              <div className="space-y-1.5">
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-950 border border-rose-700 text-rose-300 text-[11px] font-black uppercase tracking-wider">
+                  <Smartphone className="w-3.5 h-3.5" />
+                  <span>Proteksi Anti-Screenshot HP Siswa</span>
+                </span>
+                <h2 className="text-lg sm:text-xl font-black text-white tracking-tight">
+                  TANGKAPAN LAYAR (SCREENSHOT) DIBLOKIR!
+                </h2>
+              </div>
+
+              <div className="p-3.5 rounded-2xl bg-rose-950/70 border border-rose-800/80 text-xs text-rose-200 leading-relaxed font-medium">
+                {screenshotBlockState.reason || 'Terdeteksi aktivitas tangkapan layar / multi-sentuh pada HP siswa.'}
+              </div>
+
+              <div className="p-3 rounded-xl bg-slate-950/90 border border-slate-800 text-[11px] text-slate-300 space-y-1 font-mono">
+                <div>PESERTA: {student.name.toUpperCase()}</div>
+                <div>KELAS: {student.studentClass} &bull; ABSEN: {student.studentNumber}</div>
+                <div className="text-amber-400 font-bold">
+                  TERCATAT DI DASHBOARD GURU ({screenshotBlockState.blockedCount}x PERCOBAAN)
+                </div>
+              </div>
+
+              <p className="text-[11px] text-slate-400 leading-relaxed">
+                Demi kejujuran ujian, fitur <strong>Screenshot 3 Jari</strong>, <strong>Tombol Power + Volume</strong>, dan <strong>Rekam Layar</strong> dinonaktifkan. Gunakan <strong>1 jari</strong> saat mengerjakan soal.
+              </p>
+
+              <button
+                type="button"
+                disabled={screenshotBlockState.cooldownSeconds > 0}
+                onClick={handleDismissScreenshotLock}
+                className={`w-full py-3.5 rounded-2xl font-extrabold text-xs sm:text-sm transition-all flex items-center justify-center gap-2 ${
+                  screenshotBlockState.cooldownSeconds > 0
+                    ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'
+                    : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg cursor-pointer active:scale-98'
+                }`}
+              >
+                {screenshotBlockState.cooldownSeconds > 0 ? (
+                  <>
+                    <Lock className="w-4 h-4 animate-spin" />
+                    <span>Layar Dikunci ({screenshotBlockState.cooldownSeconds} detik)...</span>
+                  </>
+                ) : (
+                  <>
+                    <ShieldCheck className="w-4 h-4" />
+                    <span>Saya Mengerti, Kembali ke Soal (Gunakan 1 Jari)</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Resumed Notification Banner */}
       <AnimatePresence>
         {showResumedToast && (
@@ -450,34 +792,18 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
           </div>
 
           <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0 flex-wrap">
-            {/* Anti-Cheat Tab Protection Toggle Button */}
-            <button 
-              type="button"
-              onClick={() => {
-                playClickSound();
-                setAntiCheatEnabled(prev => !prev);
-              }}
-              className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl border text-[11px] sm:text-xs font-bold shadow-2xs transition-all cursor-pointer active:scale-95 ${
-                antiCheatEnabled 
-                  ? 'bg-emerald-50 text-emerald-900 border-emerald-300 ring-1 ring-emerald-400' 
-                  : 'bg-slate-100 text-slate-600 border-slate-200 hover:bg-slate-200'
+            {/* Locked Anti-Screenshot & Anti-Cheat Status Badge */}
+            <div
+              className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl border text-[11px] sm:text-xs font-bold shadow-2xs select-none ${
+                isAntiScreenshotEnabled
+                  ? 'bg-emerald-50 text-emerald-900 border-emerald-300 ring-1 ring-emerald-400/60'
+                  : 'bg-slate-100 text-slate-600 border-slate-200'
               }`}
-              title={antiCheatEnabled ? 'Anti-Curang Tab AKTIF (Klik untuk nonaktifkan)' : 'Anti-Curang Tab NONAKTIF (Klik untuk aktifkan)'}
+              title="Proteksi Anti-Screenshot HP Siswa & Anti-Curang dikontrol oleh Guru"
             >
-              {antiCheatEnabled ? (
-                <>
-                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                  <span className="hidden sm:inline">Anti-Curang:</span>
-                  <span>ON</span>
-                </>
-              ) : (
-                <>
-                  <ShieldAlert className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                  <span className="hidden sm:inline">Anti-Curang:</span>
-                  <span>OFF</span>
-                </>
-              )}
-            </button>
+              <Smartphone className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+              <span>Anti-Screenshot HP: {isAntiScreenshotEnabled ? 'ON' : 'OFF'}</span>
+            </div>
 
             {/* Exit / Return to Main Screen */}
             <button
@@ -600,6 +926,77 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
         </div>
       </div>
 
+      {/* Mobile Anti-Screenshot Control & Sensor Status Bar */}
+      {isAntiScreenshotEnabled && (
+        <div
+          className={`mb-3.5 sm:mb-4 p-3 sm:p-3.5 rounded-2xl border transition-colors flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 shadow-2xs ${
+            isTouchHoldMode
+              ? isHoldingSingleFinger
+                ? 'bg-emerald-950 text-white border-emerald-600'
+                : 'bg-slate-900 text-white border-amber-500/80'
+              : 'bg-slate-900 text-white border-emerald-500/80'
+          }`}
+        >
+          <div className="flex items-start sm:items-center gap-2.5 min-w-0">
+            <div
+              className={`w-8 h-8 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center shrink-0 ${
+                isTouchHoldMode && isHoldingSingleFinger
+                  ? 'bg-emerald-500 text-slate-950'
+                  : 'bg-amber-500 text-slate-950'
+              }`}
+            >
+              <Fingerprint className="w-5 h-5" />
+            </div>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs sm:text-sm font-extrabold tracking-tight">
+                  Mode Anti-Screenshot HP Siswa Aktif
+                </span>
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-white/15 text-amber-300">
+                  {isTouchHoldMode
+                    ? 'Tirai Sentuh 1 Jari + Blokir 3 Jari & Tombol'
+                    : 'Sensor Blokir 3 Jari + Watermark ID'}
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-300 mt-0.5 leading-snug">
+                {isTouchHoldMode
+                  ? isHoldingSingleFinger
+                    ? 'Sensor 1 Jari Aktif: Teks soal terbuka. Lepas jari = soal otomatis disensor kembali dalam 0 detik.'
+                    : 'Tempel & tahan 1 jari pada area soal untuk membaca & menjawab. Sentuhan >1 jari (screenshot) langsung diblokir.'
+                  : 'Layar dilindungi sensor anti-screenshot 3 jari, blokir salin teks, dan watermark identitas siswa.'}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+            {screenshotBlockState.blockedCount > 0 && (
+              <span className="text-[11px] font-extrabold px-2.5 py-1 rounded-lg bg-rose-600 text-white">
+                Diblokir: {screenshotBlockState.blockedCount}x
+              </span>
+            )}
+            <span
+              className={`text-[11px] font-bold px-2.5 py-1 rounded-lg flex items-center gap-1.5 ${
+                !isTouchHoldMode || isHoldingSingleFinger
+                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                  : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+              }`}
+            >
+              {!isTouchHoldMode || isHoldingSingleFinger ? (
+                <>
+                  <ShieldCheck className="w-3.5 h-3.5" />
+                  <span>Soal Terbuka</span>
+                </>
+              ) : (
+                <>
+                  <EyeOff className="w-3.5 h-3.5" />
+                  <span>Tahan 1 Jari di Soal</span>
+                </>
+              )}
+            </span>
+          </div>
+        </div>
+      )}
+
       {/* Main Question Box */}
       <motion.div
         key={currentQuestion.id}
@@ -607,8 +1004,44 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
         animate={{ opacity: 1, x: 0 }}
         exit={{ opacity: 0, x: -6 }}
         transition={{ duration: 0.15 }}
-        className="bg-white rounded-2xl sm:rounded-3xl p-4 sm:p-7 border border-amber-200 shadow-sm mb-4 sm:mb-6"
+        ref={questionGuardRef}
+        onTouchStart={handleCardTouchStart}
+        onTouchEnd={handleCardTouchEnd}
+        onTouchCancel={handleCardTouchEnd}
+        onMouseDown={handleCardMouseDown}
+        onMouseUp={handleCardMouseUpOrLeave}
+        onMouseLeave={handleCardMouseUpOrLeave}
+        className={`bg-white rounded-2xl sm:rounded-3xl p-4 sm:p-7 border border-amber-200 shadow-sm mb-4 sm:mb-6 relative overflow-hidden ${
+          isTouchHoldMode ? 'touch-hold-guard' : ''
+        }`}
       >
+        {/* Dynamic Moving Forensic Student Watermark Overlay (Anti-External Camera & Anti-Screenshot) */}
+        {isAntiScreenshotEnabled && (
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 z-20 overflow-hidden select-none opacity-[0.085]"
+          >
+            <div
+              className="w-[150%] -ml-[25%] h-[150%] -mt-[10%] flex flex-col justify-around -rotate-12 transition-transform duration-700"
+              style={{
+                transform: `rotate(-12deg) translate(${(seconds % 3) * 6 - 6}px, ${(seconds % 2) * 6 - 3}px)`,
+              }}
+            >
+              {Array.from({ length: 8 }).map((_, rowIdx) => (
+                <div
+                  key={rowIdx}
+                  className="whitespace-nowrap text-[10px] sm:text-xs font-black tracking-widest text-slate-900 uppercase"
+                >
+                  {Array.from({ length: 4 }).map((__, colIdx) => (
+                    <span key={colIdx} className="mx-4">
+                      DILARANG SCREENSHOT &bull; {student.name} ({student.studentClass} / NO.{student.studentNumber}) &bull; SOAL #{currentIndex + 1} &bull; {formatTime(seconds)}
+                    </span>
+                  ))}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
         {/* Question Header & Tags */}
         <div className="flex items-center justify-between gap-2 pb-3.5 border-b border-slate-100 mb-4 sm:mb-5">
           <div className="flex items-center gap-2">
@@ -775,75 +1208,114 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
           </div>
         )}
 
-        {/* Optional Context Box (Recipe Text / Worksheet Excerpt) */}
-        {currentQuestion.contextText && (
-          <div className="mb-4 sm:mb-6 p-3.5 sm:p-5 rounded-xl sm:rounded-2xl bg-amber-50/80 border border-amber-200 text-slate-800">
-            <div className="flex items-center justify-between gap-1.5 mb-2">
-              <div className="flex items-center gap-1.5 font-bold text-xs text-amber-900 uppercase tracking-wider">
-                <BookOpen className="w-3.5 h-3.5 text-amber-700 shrink-0" />
-                <span className="truncate">{currentQuestion.contextTitle || 'Teks Bacaan (English for Nusantara)'}</span>
+        {/* Protected Question & Options Area (Covered by 0ms Touch-Hold Privacy Shield on Student Phone) */}
+        <div className="relative">
+          {/* Floating Touch-Hold Curtain Banner (pointer-events-none so 1st finger touch passes directly through to options) */}
+          {isTouchHoldMode && (
+            <div
+              aria-hidden="true"
+              className="touch-curtain-overlay pointer-events-none absolute inset-0 z-30 flex flex-col items-center justify-center p-4 text-center rounded-2xl bg-slate-950/75 backdrop-blur-[2px]"
+            >
+              <div className="max-w-sm w-full bg-slate-900/95 border-2 border-amber-400/90 rounded-2xl p-4 sm:p-5 shadow-xl text-white space-y-2">
+                <div className="w-11 h-11 rounded-2xl bg-amber-500 text-slate-950 flex items-center justify-center mx-auto shadow-md">
+                  <Fingerprint className="w-6 h-6 animate-pulse" />
+                </div>
+                <div className="text-xs sm:text-sm font-black uppercase tracking-wide text-amber-300">
+                  Mode Anti-Screenshot HP Siswa
+                </div>
+                <p className="text-xs sm:text-sm font-bold text-white leading-snug">
+                  Sentuh &amp; Tahan 1 Jari di Sini untuk Membaca Soal &amp; Memilih Jawaban
+                </p>
+                <p className="text-[10.5px] sm:text-[11px] text-slate-300 leading-relaxed">
+                  Saat jari dilepas untuk menekan tombol screenshot HP atau saat terdeteksi &gt;1 jari, soal otomatis tertutup rapat dalam 0 detik.
+                </p>
+                {currentAnswer && (
+                  <div className="pt-1">
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-emerald-500/20 border border-emerald-400/50 text-emerald-300 text-xs font-extrabold">
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>Jawaban Tersimpan di Soal Ini: Opsi {currentAnswer}</span>
+                    </span>
+                  </div>
+                )}
               </div>
-              <button
-                type="button"
-                onClick={() => handleTogglePlayAudio(currentQuestion.contextText)}
-                className="text-[11px] font-bold text-amber-800 hover:text-amber-950 flex items-center gap-1 px-2 py-0.5 rounded-md hover:bg-amber-200/60 transition-colors"
-                title="Dengarkan teks bacaan ini"
-              >
-                <Volume2 className="w-3 h-3" />
-                <span>Dengarkan Teks</span>
-              </button>
             </div>
-            <pre className="whitespace-pre-wrap font-sans text-xs sm:text-sm text-slate-700 leading-relaxed bg-white/90 p-3 sm:p-4 rounded-xl border border-amber-100 overflow-x-auto">
-              {currentQuestion.contextText}
-            </pre>
+          )}
+
+          {/* Optional Context Box (Recipe Text / Worksheet Excerpt) */}
+          {currentQuestion.contextText && (
+            <div className="mb-4 sm:mb-6 p-3.5 sm:p-5 rounded-xl sm:rounded-2xl bg-amber-50/80 border border-amber-200 text-slate-800">
+              <div className="flex items-center justify-between gap-1.5 mb-2">
+                <div className="flex items-center gap-1.5 font-bold text-xs text-amber-900 uppercase tracking-wider">
+                  <BookOpen className="w-3.5 h-3.5 text-amber-700 shrink-0" />
+                  <span className="truncate">{currentQuestion.contextTitle || 'Teks Bacaan (English for Nusantara)'}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleTogglePlayAudio(currentQuestion.contextText)}
+                  className="text-[11px] font-bold text-amber-800 hover:text-amber-950 flex items-center gap-1 px-2 py-0.5 rounded-md hover:bg-amber-200/60 transition-colors"
+                  title="Dengarkan teks bacaan ini"
+                >
+                  <Volume2 className="w-3 h-3" />
+                  <span>Dengarkan Teks</span>
+                </button>
+              </div>
+              <pre className="protected-exam-text whitespace-pre-wrap font-sans text-xs sm:text-sm text-slate-700 leading-relaxed bg-white/90 p-3 sm:p-4 rounded-xl border border-amber-100 overflow-x-auto">
+                {currentQuestion.contextText}
+              </pre>
+            </div>
+          )}
+
+          {/* Question Text with listen button */}
+          <div className="flex items-start justify-between gap-3 mb-4 sm:mb-6">
+            <h2 className="protected-exam-text text-sm sm:text-lg font-bold text-slate-900 leading-relaxed">
+              {currentQuestion.question}
+            </h2>
+            <button
+              type="button"
+              onClick={() => handleTogglePlayAudio(currentQuestion.question)}
+              className="shrink-0 p-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 shadow-2xs active:scale-95 transition-all cursor-pointer"
+              title="Dengarkan pembacaan pertanyaan ini"
+            >
+              <Volume2 className="w-4 h-4" />
+            </button>
           </div>
-        )}
 
-        {/* Question Text with listen button */}
-        <div className="flex items-start justify-between gap-3 mb-4 sm:mb-6">
-          <h2 className="text-sm sm:text-lg font-bold text-slate-900 leading-relaxed">
-            {currentQuestion.question}
-          </h2>
-          <button
-            type="button"
-            onClick={() => handleTogglePlayAudio(currentQuestion.question)}
-            className="shrink-0 p-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 shadow-2xs active:scale-95 transition-all cursor-pointer"
-            title="Dengarkan pembacaan pertanyaan ini"
-          >
-            <Volume2 className="w-4 h-4" />
-          </button>
-        </div>
-
-        {/* Options List */}
-        <div className="space-y-2.5 sm:space-y-3">
-          {currentQuestion.options.map(option => {
-            const isSelected = currentAnswer === option.key;
-            return (
-              <button
-                key={option.key}
-                type="button"
-                onClick={() => handleSelectOption(option.key)}
-                className={`w-full text-left p-3.5 sm:p-4 rounded-xl sm:rounded-2xl border-2 transition-all flex items-start gap-3 cursor-pointer group active:scale-[0.99] ${
-                  isSelected
-                    ? 'border-amber-500 bg-amber-50/90 text-slate-900 shadow-xs'
-                    : 'border-slate-200 hover:border-amber-300 hover:bg-amber-50/30 text-slate-700 bg-white'
-                }`}
-              >
-                <span
-                  className={`w-7 h-7 sm:w-8 sm:h-8 shrink-0 rounded-lg sm:rounded-xl flex items-center justify-center text-xs sm:text-sm font-black transition-colors ${
+          {/* Options List */}
+          <div className="space-y-2.5 sm:space-y-3">
+            {currentQuestion.options.map(option => {
+              const isSelected = currentAnswer === option.key;
+              return (
+                <button
+                  key={option.key}
+                  type="button"
+                  onClick={() => handleSelectOption(option.key)}
+                  className={`w-full text-left p-3.5 sm:p-4 rounded-xl sm:rounded-2xl border-2 transition-all flex items-start gap-3 cursor-pointer group active:scale-[0.99] ${
                     isSelected
-                      ? 'bg-amber-600 text-white shadow-2xs'
-                      : 'bg-slate-100 text-slate-700 group-hover:bg-amber-100 group-hover:text-amber-900'
+                      ? 'border-amber-500 bg-amber-50/90 text-slate-900 shadow-xs'
+                      : 'border-slate-200 hover:border-amber-300 hover:bg-amber-50/30 text-slate-700 bg-white'
                   }`}
                 >
-                  {option.key}
-                </span>
-                <span className="text-xs sm:text-base leading-relaxed pt-0.5 font-medium">
-                  {option.text}
-                </span>
-              </button>
-            );
-          })}
+                  <span
+                    className={`w-7 h-7 sm:w-8 sm:h-8 shrink-0 rounded-lg sm:rounded-xl flex items-center justify-center text-xs sm:text-sm font-black transition-colors ${
+                      isSelected
+                        ? 'bg-amber-600 text-white shadow-2xs'
+                        : 'bg-slate-100 text-slate-700 group-hover:bg-amber-100 group-hover:text-amber-900'
+                    }`}
+                  >
+                    {option.key}
+                  </span>
+                  <span className="protected-exam-text text-xs sm:text-base leading-relaxed pt-0.5 font-medium flex-1">
+                    {option.text}
+                  </span>
+                  {isSelected && (
+                    <span className="shrink-0 text-[10px] sm:text-xs font-extrabold px-2 py-0.5 rounded-md bg-amber-500 text-white self-center">
+                      Terpilih
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
         </div>
       </motion.div>
 

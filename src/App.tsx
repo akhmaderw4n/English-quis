@@ -828,6 +828,8 @@ export default function App() {
             onViolationOccurred={handleViolationOccurred}
             resumedBannerNotice={resumedFromViolation}
             timeLimitMinutes={studentRestrictions.timeLimitMinutes}
+            shuffleQuestions={studentRestrictions.shuffleQuestions !== false}
+            antiScreenshotMode={studentRestrictions.antiScreenshotMode ?? 'touch_hold'}
           />
         )}
 

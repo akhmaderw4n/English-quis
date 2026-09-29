@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
-import { X, CheckCircle, XCircle, BookOpen, AlertCircle, Sparkles, Volume2, Headphones, Square } from 'lucide-react';
+import { X, CheckCircle, XCircle, BookOpen, AlertCircle, Sparkles, Volume2, Headphones, Square, Smartphone } from 'lucide-react';
 import { Question } from '../types';
 import { QUIZ_QUESTIONS, QUIZ_METADATA } from '../data/quizData';
 import { speakEnglish, stopSpeech, playClickSound } from '../utils/audio';
@@ -21,6 +21,30 @@ export const ReviewModal: React.FC<ReviewModalProps> = ({
   questions = QUIZ_QUESTIONS,
 }) => {
   const [playingId, setPlayingId] = useState<number | null>(null);
+  const [isScreenshotBlocked, setIsScreenshotBlocked] = useState(false);
+
+  useEffect(() => {
+    const handleTouch = (e: TouchEvent) => {
+      if (e.touches && e.touches.length >= 2) {
+        if (e.cancelable) e.preventDefault();
+        setIsScreenshotBlocked(true);
+      }
+    };
+    const handleBlur = () => setIsScreenshotBlocked(true);
+    const handleContext = (e: Event) => e.preventDefault();
+
+    window.addEventListener('touchstart', handleTouch, { capture: true, passive: false });
+    window.addEventListener('touchmove', handleTouch, { capture: true, passive: false });
+    window.addEventListener('blur', handleBlur);
+    document.addEventListener('contextmenu', handleContext);
+
+    return () => {
+      window.removeEventListener('touchstart', handleTouch, { capture: true });
+      window.removeEventListener('touchmove', handleTouch, { capture: true });
+      window.removeEventListener('blur', handleBlur);
+      document.removeEventListener('contextmenu', handleContext);
+    };
+  }, []);
 
   const handlePlayQuestionAudio = (q: Question) => {
     playClickSound();
@@ -46,13 +70,29 @@ export const ReviewModal: React.FC<ReviewModalProps> = ({
     onClose();
   };
   return (
-    <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-0 sm:p-4 overflow-y-auto">
+    <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-0 sm:p-4 overflow-y-auto anti-screenshot-zone">
       <motion.div
         initial={{ opacity: 0, y: 15 }}
         animate={{ opacity: 1, y: 0 }}
         exit={{ opacity: 0, y: 15 }}
-        className="bg-white rounded-none sm:rounded-2xl max-w-3xl w-full h-full sm:h-auto sm:max-h-[90vh] flex flex-col border-0 sm:border border-slate-200 shadow-2xl overflow-hidden"
+        className="bg-white rounded-none sm:rounded-2xl max-w-3xl w-full h-full sm:h-auto sm:max-h-[90vh] flex flex-col border-0 sm:border border-slate-200 shadow-2xl overflow-hidden relative"
       >
+        {isScreenshotBlocked && (
+          <div className="absolute inset-0 z-50 bg-slate-950 text-white flex flex-col items-center justify-center p-6 text-center space-y-3">
+            <Smartphone className="w-10 h-10 text-rose-400 animate-pulse" />
+            <h4 className="text-base font-black">SCREENSHOT PEMBAHASAN DIBLOKIR DI HP SISWA</h4>
+            <p className="text-xs text-slate-300 max-w-sm">
+              Kunci jawaban dan pembahasan tidak diizinkan untuk di-screenshot atau disebarkan ke kelas lain.
+            </p>
+            <button
+              type="button"
+              onClick={() => setIsScreenshotBlocked(false)}
+              className="px-4 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold cursor-pointer"
+            >
+              Lanjutkan Membaca (Gunakan 1 Jari)
+            </button>
+          </div>
+        )}
         {/* Modal Header */}
         <div className="p-3.5 sm:p-5 border-b border-slate-200 bg-amber-50/70 flex items-center justify-between gap-2.5 shrink-0">
           <div className="min-w-0">

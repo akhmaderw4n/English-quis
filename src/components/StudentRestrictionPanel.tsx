@@ -19,7 +19,9 @@ import {
   AlertTriangle,
   UserPlus,
   Trash2,
-  Database
+  Database,
+  Smartphone,
+  Fingerprint
 } from 'lucide-react';
 import { StudentRestrictionConfig, QuizSubmission, RegisteredStudent } from '../types';
 import {
@@ -283,6 +285,24 @@ export const StudentRestrictionPanel: React.FC<StudentRestrictionPanelProps> = (
     };
     onUpdateConfig(updated);
     showToast(`Kuota tambahan untuk ${studentName} dikembalikan ke batas standar`);
+  };
+
+  const handleSelectAntiScreenshotMode = (mode: 'touch_hold' | 'auto_sensor' | 'off') => {
+    playClickSound();
+    const updated: StudentRestrictionConfig = {
+      ...config,
+      antiScreenshotMobile: mode !== 'off',
+      antiScreenshotMode: mode,
+      updatedAt: new Date().toISOString(),
+    };
+    onUpdateConfig(updated);
+    const label =
+      mode === 'touch_hold'
+        ? 'Mode Ketat HP: Tirai Sentuh 1 Jari + Blokir 3 Jari & Tombol + Watermark'
+        : mode === 'auto_sensor'
+        ? 'Mode Sensor Otomatis: Blokir Gestur 3 Jari, Fokus Layar & Watermark'
+        : 'Proteksi Anti-Screenshot HP Dinonaktifkan';
+    showToast(`Mode Anti-Screenshot HP Siswa diatur ke: ${label}`);
   };
 
   // --- Database Siswa / Guru & Cross-Class Conflict Handlers ---
@@ -877,6 +897,86 @@ export const StudentRestrictionPanel: React.FC<StudentRestrictionPanelProps> = (
               </button>
             </div>
           )}
+        </div>
+      </div>
+
+      {/* Card Khusus: Mode Tidak Bisa di-Screenshot di HP Siswa */}
+      <div className="bg-slate-900 text-white p-5 rounded-2xl border-2 border-amber-500/80 shadow-sm space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-xl bg-amber-500 text-slate-950 flex items-center justify-center shrink-0 shadow-xs">
+              <Smartphone className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h4 className="font-extrabold text-white text-sm sm:text-base">
+                  Mode Tidak Bisa di-Screenshot di HP Siswa (Proteksi Layar Ujian HP)
+                </h4>
+                <span
+                  className={`px-2.5 py-0.5 rounded-md text-[10px] font-extrabold ${
+                    (config.antiScreenshotMode ?? 'touch_hold') !== 'off'
+                      ? 'bg-emerald-500 text-slate-950'
+                      : 'bg-rose-600 text-white'
+                  }`}
+                >
+                  {(config.antiScreenshotMode ?? 'touch_hold') !== 'off'
+                    ? 'PROTEKSI HP AKTIF'
+                    : 'NONAKTIF'}
+                </span>
+              </div>
+              <p className="text-xs text-slate-300 mt-0.5">
+                Mencegah siswa mengambil tangkapan layar (screenshot 3 jari maupun tombol fisik Power + Volume Bawah) serta menyalin soal di HP.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          {[
+            {
+              id: 'touch_hold',
+              title: 'Mode Ketat HP: Tirai Sentuh 1 Jari (Rekomendasi)',
+              desc: 'Soal & opsi disensor otomatis; hanya terbuka saat 1 jari menempel di layar. Lepas jari (untuk tekan tombol screenshot HP) atau sentuh >1 jari (screenshot 3 jari) langsung menutup soal dalam 0 detik.',
+            },
+            {
+              id: 'auto_sensor',
+              title: 'Mode Sensor Otomatis (3 Jari & Watermark)',
+              desc: 'Soal tampil normal tanpa perlu ditahan jari, namun langsung menghitam 0 detik saat mendeteksi gestur 2/3 jari, tarik panel notifikasi/rekam layar, ditambah Watermark Identitas Siswa bergerak.',
+            },
+            {
+              id: 'off',
+              title: 'Nonaktif (OFF)',
+              desc: 'Matikan proteksi anti-screenshot pada layar HP siswa.',
+            },
+          ].map((item) => {
+            const currentMode = config.antiScreenshotMode ?? 'touch_hold';
+            const isSelected = currentMode === item.id;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() =>
+                  handleSelectAntiScreenshotMode(item.id as 'touch_hold' | 'auto_sensor' | 'off')
+                }
+                className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
+                  isSelected
+                    ? 'bg-amber-500/15 border-amber-400 ring-2 ring-amber-400/50 text-white'
+                    : 'bg-slate-800/80 hover:bg-slate-800 border-slate-700 text-slate-300'
+                }`}
+              >
+                <div>
+                  <div className="flex items-center justify-between gap-2 mb-1.5">
+                    <span className="font-extrabold text-xs sm:text-sm flex items-center gap-1.5">
+                      <Fingerprint className="w-4 h-4 text-amber-400 shrink-0" />
+                      <span>{item.title}</span>
+                    </span>
+                    {isSelected && <CheckCircle2 className="w-4 h-4 text-amber-400 shrink-0" />}
+                  </div>
+                  <p className="text-[11px] text-slate-300 leading-relaxed">{item.desc}</p>
+                </div>
+              </button>
+            );
+          })}
         </div>
       </div>
 

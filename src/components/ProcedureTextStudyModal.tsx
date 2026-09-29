@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { 
   BookOpen, 
@@ -10,7 +10,8 @@ import {
   CheckCircle2,
   Sparkles,
   MessageSquare,
-  UserCheck
+  UserCheck,
+  Smartphone
 } from 'lucide-react';
 import { ProcedureTextConfig, ProcedureTextRecipe } from '../types';
 import { speakEnglish, stopSpeech, playClickSound } from '../utils/audio';
@@ -32,6 +33,26 @@ export const ProcedureTextStudyModal: React.FC<ProcedureTextStudyModalProps> = (
   });
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
   const [playingRecipeId, setPlayingRecipeId] = useState<string | null>(null);
+  const [isScreenshotBlocked, setIsScreenshotBlocked] = useState(false);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleTouch = (e: TouchEvent) => {
+      if (e.touches && e.touches.length >= 2) {
+        if (e.cancelable) e.preventDefault();
+        setIsScreenshotBlocked(true);
+      }
+    };
+    const handleContext = (e: Event) => e.preventDefault();
+    window.addEventListener('touchstart', handleTouch, { capture: true, passive: false });
+    window.addEventListener('touchmove', handleTouch, { capture: true, passive: false });
+    document.addEventListener('contextmenu', handleContext);
+    return () => {
+      window.removeEventListener('touchstart', handleTouch, { capture: true });
+      window.removeEventListener('touchmove', handleTouch, { capture: true });
+      document.removeEventListener('contextmenu', handleContext);
+    };
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -76,13 +97,29 @@ export const ProcedureTextStudyModal: React.FC<ProcedureTextStudyModalProps> = (
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-2.5 sm:p-4 overflow-y-auto">
+    <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-2.5 sm:p-4 overflow-y-auto anti-screenshot-zone">
       <motion.div
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
         exit={{ opacity: 0, scale: 0.95 }}
-        className="bg-white rounded-2xl sm:rounded-3xl max-w-4xl w-full max-h-[92vh] flex flex-col shadow-2xl border border-slate-200 overflow-hidden my-auto"
+        className="bg-white rounded-2xl sm:rounded-3xl max-w-4xl w-full max-h-[92vh] flex flex-col shadow-2xl border border-slate-200 overflow-hidden my-auto relative"
       >
+        {isScreenshotBlocked && (
+          <div className="absolute inset-0 z-50 bg-slate-950 text-white flex flex-col items-center justify-center p-6 text-center space-y-3">
+            <Smartphone className="w-10 h-10 text-rose-400 animate-pulse" />
+            <h4 className="text-base font-black">SCREENSHOT MODUL AJAR DIBLOKIR DI HP SISWA</h4>
+            <p className="text-xs text-slate-300 max-w-sm">
+              Modul materi hanya diizinkan dibaca langsung dengan 1 jari dan tidak dapat di-screenshot.
+            </p>
+            <button
+              type="button"
+              onClick={() => setIsScreenshotBlocked(false)}
+              className="px-4 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold cursor-pointer"
+            >
+              Lanjutkan Membaca (Gunakan 1 Jari)
+            </button>
+          </div>
+        )}
         {/* Modal Header */}
         <div className="p-4 sm:p-5 border-b border-amber-200 bg-gradient-to-r from-amber-500 to-orange-500 text-white flex items-center justify-between gap-3 shrink-0">
           <div className="flex items-center gap-2.5">

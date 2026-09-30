@@ -73,7 +73,18 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
   shuffleQuestions = true,
   antiScreenshotMode = 'touch_hold',
 }) => {
-  const draftStorageKey = `en_nusantara_quiz_draft_${student.studentClass.trim().toUpperCase()}_${student.studentNumber.trim()}_${student.name.trim().toLowerCase()}`;
+  const safeStudentName = (student?.name || 'Siswa').trim();
+  const safeStudentClass = (student?.studentClass || '7A').trim().toUpperCase();
+  const safeStudentNumber = (student?.studentNumber || '1').trim();
+  const draftStorageKey = `en_nusantara_quiz_draft_${safeStudentClass}_${safeStudentNumber}_${safeStudentName.toLowerCase()}`;
+
+  const validQuestions = React.useMemo(() => {
+    const list = Array.isArray(questions) && questions.length > 0 ? questions : QUIZ_QUESTIONS;
+    return list.filter(
+      (q): q is Question =>
+        Boolean(q && typeof q.id === 'number' && typeof q.question === 'string' && Array.isArray(q.options))
+    );
+  }, [questions]);
 
   const savedDraft = React.useMemo(() => {
     try {
@@ -95,7 +106,7 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
   }, [draftStorageKey]);
 
   const [questionOrderIds] = useState<number[]>(() => {
-    const baseIds = questions.map((q) => q.id);
+    const baseIds = validQuestions.map((q) => q.id);
     if (
       savedDraft?.questionOrderIds &&
       Array.isArray(savedDraft.questionOrderIds) &&
@@ -115,7 +126,7 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
   });
 
   const orderedQuestions = React.useMemo(() => {
-    const qMap = new Map(questions.map((q) => [q.id, q]));
+    const qMap = new Map(validQuestions.map((q) => [q.id, q]));
     const ordered: Question[] = [];
     questionOrderIds.forEach((id) => {
       const found = qMap.get(id);
@@ -125,8 +136,8 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
       }
     });
     qMap.forEach((remaining) => ordered.push(remaining));
-    return ordered.length > 0 ? ordered : questions;
-  }, [questions, questionOrderIds]);
+    return ordered.length > 0 ? ordered : validQuestions;
+  }, [validQuestions, questionOrderIds]);
 
   const hasRecoveredDraft = Boolean(
     savedDraft &&
@@ -136,14 +147,18 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
 
   const [currentIndex, setCurrentIndex] = useState<number>(() =>
     hasRecoveredDraft && typeof savedDraft?.currentIndex === 'number'
-      ? Math.min(savedDraft.currentIndex, Math.max(0, questions.length - 1))
-      : initialIndex
+      ? Math.min(Math.max(0, savedDraft.currentIndex), Math.max(0, validQuestions.length - 1))
+      : Math.min(Math.max(0, initialIndex), Math.max(0, validQuestions.length - 1))
   );
   const [answers, setAnswers] = useState<Record<number, 'A' | 'B' | 'C' | 'D'>>(() =>
-    hasRecoveredDraft && savedDraft?.answers ? savedDraft.answers : initialAnswers
+    hasRecoveredDraft && savedDraft?.answers && typeof savedDraft.answers === 'object'
+      ? savedDraft.answers
+      : initialAnswers
   );
   const [flagged, setFlagged] = useState<Record<number, boolean>>(() =>
-    hasRecoveredDraft && savedDraft?.flagged ? savedDraft.flagged : initialFlagged
+    hasRecoveredDraft && savedDraft?.flagged && typeof savedDraft.flagged === 'object'
+      ? savedDraft.flagged
+      : initialFlagged
   );
   const [seconds, setSeconds] = useState<number>(() =>
     hasRecoveredDraft && typeof savedDraft?.seconds === 'number' ? savedDraft.seconds : initialSeconds
@@ -181,7 +196,12 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
   const isTouchHoldMode = antiScreenshotMode === 'touch_hold';
 
   const questionGuardRef = useRef<HTMLDivElement | null>(null);
-  const [isHoldingSingleFinger, setIsHoldingSingleFinger] = useState(false);
+  const touchRevealTimeoutRef = useRef<number | null>(null);
+  const twoFingerStartYRef = useRef<number | null>(null);
+  // Start with the reading curtain open (true) so students can immediately read & answer without being stuck on a dark overlay
+  const [isHoldingSingleFinger, setIsHoldingSingleFinger] = useState(true);
+  const [isWindowBlurred, setIsWindowBlurred] = useState(false);
+  const [isMultiTouchShieldActive, setIsMultiTouchShieldActive] = useState(false);
   const [screenshotBlockState, setScreenshotBlockState] = useState<{
     isLocked: boolean;
     reason: string;
@@ -195,6 +215,59 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
   });
   const lastViolationReportTsRef = useRef<number>(0);
 
+  // Keep latest mutable quiz state in a ref so global event listeners don't re-bind every 1 second
+  const latestQuizStateRef = useRef({
+    currentIndex,
+    answers,
+    flagged,
+    seconds,
+    onViolationOccurred,
+    isLocked: screenshotBlockState.isLocked,
+  });
+  useEffect(() => {
+    latestQuizStateRef.current = {
+      currentIndex,
+      answers,
+      flagged,
+      seconds,
+      onViolationOccurred,
+      isLocked: screenshotBlockState.isLocked,
+    };
+  }, [currentIndex, answers, flagged, seconds, onViolationOccurred, screenshotBlockState.isLocked]);
+
+  const clearTouchRevealTimer = React.useCallback(() => {
+    if (touchRevealTimeoutRef.current !== null) {
+      window.clearTimeout(touchRevealTimeoutRef.current);
+      touchRevealTimeoutRef.current = null;
+    }
+  }, []);
+
+  const hideQuestionCardInstant = React.useCallback(() => {
+    clearTouchRevealTimer();
+    questionGuardRef.current?.classList.remove('touch-reveal-active');
+    setIsHoldingSingleFinger(false);
+  }, [clearTouchRevealTimer]);
+
+  const revealQuestionCard = React.useCallback(
+    (autoHideAfterMs: number = 45000) => {
+      if (latestQuizStateRef.current.isLocked) return;
+      clearTouchRevealTimer();
+      setIsWindowBlurred(false);
+      setIsMultiTouchShieldActive(false);
+      questionGuardRef.current?.classList.add('touch-reveal-active');
+      setIsHoldingSingleFinger(true);
+
+      if (isTouchHoldMode && autoHideAfterMs > 0) {
+        touchRevealTimeoutRef.current = window.setTimeout(() => {
+          questionGuardRef.current?.classList.remove('touch-reveal-active');
+          setIsHoldingSingleFinger(false);
+          touchRevealTimeoutRef.current = null;
+        }, autoHideAfterMs);
+      }
+    },
+    [clearTouchRevealTimer, isTouchHoldMode]
+  );
+
   // Cooldown countdown for Screenshot Blackout Lock Screen
   useEffect(() => {
     if (!screenshotBlockState.isLocked || screenshotBlockState.cooldownSeconds <= 0) return;
@@ -207,49 +280,46 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
     return () => clearInterval(t);
   }, [screenshotBlockState.isLocked, screenshotBlockState.cooldownSeconds]);
 
-  // Clean up body blackout class on unmount
+  // Keep body.anti-screenshot-blackout strictly synchronized with lock state so screen never gets stuck blank
   useEffect(() => {
+    if (isAntiScreenshotEnabled && screenshotBlockState.isLocked) {
+      document.body.classList.add('anti-screenshot-blackout');
+    } else {
+      document.body.classList.remove('anti-screenshot-blackout');
+    }
     return () => {
       document.body.classList.remove('anti-screenshot-blackout');
     };
-  }, []);
+  }, [isAntiScreenshotEnabled, screenshotBlockState.isLocked]);
 
-  // Reset touch reveal when moving between question numbers
+  // Clean up timers on unmount
   useEffect(() => {
-    questionGuardRef.current?.classList.remove('touch-reveal-active');
-    setIsHoldingSingleFinger(false);
-  }, [currentIndex]);
-
-  // Zero-Latency (0ms) Anti-Screenshot HP Siswa & Tab-Switch Violation Engine
-  useEffect(() => {
-    if (!antiCheatEnabled && !isAntiScreenshotEnabled) return;
-
-    const reportViolationDebounced = (reason: string) => {
-      if (isSubmittedRef.current) return;
-      const now = Date.now();
-      if (now - lastViolationReportTsRef.current < 2200) return;
-      lastViolationReportTsRef.current = now;
-
-      setViolationsCount((prev) => prev + 1);
-      onViolationOccurred?.({
-        lastQuestionIndex: currentIndex,
-        answers,
-        flagged,
-        seconds,
-        reason,
-      });
+    return () => {
+      clearTouchRevealTimer();
+      document.body.classList.remove('anti-screenshot-blackout');
     };
+  }, [clearTouchRevealTimer]);
 
-    const triggerInstantScreenshotBlackout = (reason: string, reportToTeacher: boolean = true) => {
+  // Keep reading curtain open for 45 seconds when moving to a new question so student can read immediately
+  useEffect(() => {
+    if (!screenshotBlockState.isLocked) {
+      revealQuestionCard(45000);
+    }
+  }, [currentIndex, revealQuestionCard, screenshotBlockState.isLocked]);
+
+  const triggerInstantScreenshotBlackout = React.useCallback(
+    (reason: string, reportToTeacher: boolean = true) => {
       if (isSubmittedRef.current || !isAntiScreenshotEnabled) return;
       // 1. Synchronous 0ms DOM hiding before mobile OS framebuffer captures the screen
       document.body.classList.add('anti-screenshot-blackout');
+      clearTouchRevealTimer();
       questionGuardRef.current?.classList.remove('touch-reveal-active');
       setIsHoldingSingleFinger(false);
+      setIsMultiTouchShieldActive(true);
 
       // 2. Haptic & sound alert + clear clipboard
       try {
-        navigator.vibrate?.([200, 80, 200]);
+        navigator.vibrate?.([180, 70, 180]);
       } catch {}
       try {
         navigator.clipboard?.writeText?.('SCREENSHOT DIBLOKIR - MODE UJIAN HP SISWA').catch(() => {});
@@ -260,99 +330,157 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
       setScreenshotBlockState((prev) => ({
         isLocked: true,
         reason,
-        blockedCount: prev.blockedCount + 1,
-        cooldownSeconds: 3,
+        blockedCount: reportToTeacher ? prev.blockedCount + 1 : prev.blockedCount,
+        cooldownSeconds: reportToTeacher ? 3 : 1,
       }));
 
       if (reportToTeacher) {
-        reportViolationDebounced(reason);
+        const now = Date.now();
+        if (now - lastViolationReportTsRef.current >= 2500) {
+          lastViolationReportTsRef.current = now;
+          const st = latestQuizStateRef.current;
+          setViolationsCount((prev) => prev + 1);
+          st.onViolationOccurred?.({
+            lastQuestionIndex: st.currentIndex,
+            answers: st.answers,
+            flagged: st.flagged,
+            seconds: st.seconds,
+            reason,
+          });
+        }
       }
+    },
+    [isAntiScreenshotEnabled, clearTouchRevealTimer]
+  );
+
+  // Zero-Latency (0ms) Anti-Screenshot HP Siswa & Tab-Switch Violation Engine
+  useEffect(() => {
+    if (!antiCheatEnabled && !isAntiScreenshotEnabled) return;
+
+    const reportViolationDebounced = (reason: string) => {
+      if (isSubmittedRef.current) return;
+      const now = Date.now();
+      if (now - lastViolationReportTsRef.current < 2500) return;
+      lastViolationReportTsRef.current = now;
+
+      const st = latestQuizStateRef.current;
+      setViolationsCount((prev) => prev + 1);
+      st.onViolationOccurred?.({
+        lastQuestionIndex: st.currentIndex,
+        answers: st.answers,
+        flagged: st.flagged,
+        seconds: st.seconds,
+        reason,
+      });
     };
 
-    // 1. Multi-touch (2 or 3 fingers) gesture detection on mobile phone (3-finger swipe screenshot)
+    // 1. Multi-touch gesture detection on mobile phone (3-finger swipe screenshot & 2-finger shield)
     const handleGlobalTouchStart = (e: TouchEvent) => {
       if (!isAntiScreenshotEnabled || isSubmittedRef.current) return;
-      if (e.touches && e.touches.length >= 2) {
+      const qNum = latestQuizStateRef.current.currentIndex + 1;
+
+      const touchCount = e.touches ? e.touches.length : 0;
+      if (touchCount >= 3) {
         if (e.cancelable) e.preventDefault();
         triggerInstantScreenshotBlackout(
-          `Terdeteksi percobaan Screenshot HP (Sentuhan ${e.touches.length} Jari pada Soal No. ${currentIndex + 1})`,
+          `Terdeteksi gestur Screenshot ${touchCount} Jari pada Soal No. ${qNum}`,
           true
         );
+      } else if (touchCount === 2) {
+        // Immediately blur question content in 0ms while 2 fingers are touching
+        hideQuestionCardInstant();
+        setIsMultiTouchShieldActive(true);
+        const avgY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+        twoFingerStartYRef.current = avgY;
+      } else if (touchCount === 1) {
+        twoFingerStartYRef.current = null;
+        setIsMultiTouchShieldActive(false);
+        setIsWindowBlurred(false);
       }
     };
 
     const handleGlobalTouchMove = (e: TouchEvent) => {
       if (!isAntiScreenshotEnabled || isSubmittedRef.current) return;
-      if (e.touches && e.touches.length >= 2) {
+      const qNum = latestQuizStateRef.current.currentIndex + 1;
+      const touchCount = e.touches ? e.touches.length : 0;
+      if (touchCount >= 3) {
         if (e.cancelable) e.preventDefault();
         triggerInstantScreenshotBlackout(
-          `Terdeteksi gestur geser ${e.touches.length} Jari (Screenshot HP) pada Soal No. ${currentIndex + 1}`,
+          `Terdeteksi gestur geser ${touchCount} Jari (Screenshot HP) pada Soal No. ${qNum}`,
           true
         );
+      } else if (touchCount === 2) {
+        hideQuestionCardInstant();
+        setIsMultiTouchShieldActive(true);
+        if (twoFingerStartYRef.current !== null) {
+          const currentAvgY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+          if (currentAvgY - twoFingerStartYRef.current > 85) {
+            twoFingerStartYRef.current = null;
+            if (e.cancelable) e.preventDefault();
+            triggerInstantScreenshotBlackout(
+              `Terdeteksi gestur geser 2 Jari ke bawah (Screenshot HP) pada Soal No. ${qNum}`,
+              true
+            );
+          }
+        }
       }
     };
 
-    // 2. TouchCancel fires on Android/iOS when hardware Power+VolumeDown screenshot or system overlay interrupts touch
     const handleGlobalTouchCancel = () => {
       if (!isAntiScreenshotEnabled || isSubmittedRef.current) return;
-      questionGuardRef.current?.classList.remove('touch-reveal-active');
-      setIsHoldingSingleFinger(false);
-      triggerInstantScreenshotBlackout(
-        `Terdeteksi interupsi tombol fisik HP / tangkapan layar sistem pada Soal No. ${currentIndex + 1}`,
-        true
-      );
+      twoFingerStartYRef.current = null;
+      setIsMultiTouchShieldActive(false);
     };
 
     const handleGlobalTouchEnd = (e: TouchEvent) => {
-      if (!e.touches || e.touches.length === 0) {
-        questionGuardRef.current?.classList.remove('touch-reveal-active');
-        setIsHoldingSingleFinger(false);
+      if (!isAntiScreenshotEnabled || isSubmittedRef.current) return;
+      const remaining = e.touches ? e.touches.length : 0;
+      if (remaining < 2) {
+        twoFingerStartYRef.current = null;
+        setIsMultiTouchShieldActive(false);
       }
     };
 
-    // 3. Visibility & Window Blur (Notification shade pull-down, Control Center, Screen Recorder, Recent Apps)
+    const handleGlobalScroll = () => {
+      if (!isAntiScreenshotEnabled || isSubmittedRef.current || latestQuizStateRef.current.isLocked) return;
+      setIsWindowBlurred(false);
+      if (isTouchHoldMode) {
+        revealQuestionCard(45000);
+      }
+    };
+
+    // 3. Visibility (Tab switch / Minimizing app / Pulling down notification drawer that hides document)
     const handleVisibility = () => {
       if (document.hidden && !isSubmittedRef.current) {
         if (isAntiScreenshotEnabled) {
-          document.body.classList.add('anti-screenshot-blackout');
-          questionGuardRef.current?.classList.remove('touch-reveal-active');
-          setIsHoldingSingleFinger(false);
-          setScreenshotBlockState((prev) => ({
-            isLocked: true,
-            reason: 'Layar otomatis dikunci karena aplikasi diminimalkan / panel layar HP dibuka',
-            blockedCount: prev.blockedCount + 1,
-            cooldownSeconds: 2,
-          }));
+          hideQuestionCardInstant();
+          setIsWindowBlurred(true);
         }
-        reportViolationDebounced('Terdeteksi membuka tab/aplikasi lain atau menarik panel sistem HP');
-      }
-    };
-
-    const handleWindowBlur = () => {
-      if (isSubmittedRef.current || !isAntiScreenshotEnabled) return;
-      document.body.classList.add('anti-screenshot-blackout');
-      questionGuardRef.current?.classList.remove('touch-reveal-active');
-      setIsHoldingSingleFinger(false);
-    };
-
-    const handleWindowFocus = () => {
-      if (!screenshotBlockState.isLocked) {
+        reportViolationDebounced('Terdeteksi membuka tab/aplikasi lain atau meminimalkan halaman ujian');
+      } else if (!document.hidden && !latestQuizStateRef.current.isLocked) {
         document.body.classList.remove('anti-screenshot-blackout');
       }
     };
 
-    // 4. Hardware/Keyboard Screenshot Keys & Print/Copy Shortcuts
+    const handleWindowFocus = () => {
+      setIsWindowBlurred(false);
+      if (!latestQuizStateRef.current.isLocked) {
+        document.body.classList.remove('anti-screenshot-blackout');
+      }
+    };
+
+    // 4. Hardware/Keyboard Screenshot Keys & Print/Copy Shortcuts (Volume keys excluded so Listening Audio works normally)
     const handleKeyDown = (e: KeyboardEvent) => {
       if (!isAntiScreenshotEnabled || isSubmittedRef.current) return;
+      setIsWindowBlurred(false);
       const keyLower = (e.key || '').toLowerCase();
 
-      // Hold Spacebar on desktop/laptop to reveal question in touch_hold mode
+      // Spacebar on desktop/laptop to reveal question in touch_hold mode
       if (e.code === 'Space' && isTouchHoldMode && !e.repeat) {
         const activeTag = document.activeElement?.tagName.toLowerCase();
-        if (activeTag !== 'input' && activeTag !== 'textarea') {
+        if (activeTag !== 'input' && activeTag !== 'textarea' && activeTag !== 'button') {
           e.preventDefault();
-          questionGuardRef.current?.classList.add('touch-reveal-active');
-          setIsHoldingSingleFinger(true);
+          revealQuestionCard(45000);
           return;
         }
       }
@@ -360,15 +488,13 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
       const isPrintScreen = e.key === 'PrintScreen' || e.keyCode === 44;
       const isSystemCaptureShortcut =
         ((e.metaKey || e.ctrlKey) && e.shiftKey && ['s', '3', '4', '5'].includes(keyLower)) ||
-        ((e.ctrlKey || e.metaKey) && ['p', 's', 'u', 'c'].includes(keyLower)) ||
-        e.key === 'AudioVolumeDown' ||
-        e.key === 'VolumeDown';
+        ((e.ctrlKey || e.metaKey) && ['p', 's', 'u'].includes(keyLower));
 
       if (isPrintScreen || isSystemCaptureShortcut) {
         e.preventDefault();
         e.stopPropagation();
         triggerInstantScreenshotBlackout(
-          `Terdeteksi tombol Screenshot / Pintasan Tangkap Layar (${e.key || 'Capture'})`,
+          `Terdeteksi tombol Screenshot / Pintasan Tangkap Layar (${e.key || 'PrintScreen'})`,
           true
         );
       }
@@ -376,10 +502,6 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
 
     const handleKeyUp = (e: KeyboardEvent) => {
       if (!isAntiScreenshotEnabled || isSubmittedRef.current) return;
-      if (e.code === 'Space' && isTouchHoldMode) {
-        questionGuardRef.current?.classList.remove('touch-reveal-active');
-        setIsHoldingSingleFinger(false);
-      }
       if (e.key === 'PrintScreen' || e.keyCode === 44) {
         e.preventDefault();
         triggerInstantScreenshotBlackout('Terdeteksi tombol PrintScreen / Tangkap Layar', true);
@@ -396,7 +518,7 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
     window.addEventListener('touchmove', handleGlobalTouchMove, { capture: true, passive: false });
     window.addEventListener('touchcancel', handleGlobalTouchCancel, { capture: true });
     window.addEventListener('touchend', handleGlobalTouchEnd, { capture: true });
-    window.addEventListener('blur', handleWindowBlur);
+    window.addEventListener('scroll', handleGlobalScroll, { capture: true, passive: true });
     window.addEventListener('focus', handleWindowFocus);
     window.addEventListener('keydown', handleKeyDown, { capture: true });
     window.addEventListener('keyup', handleKeyUp, { capture: true });
@@ -410,7 +532,7 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
       window.removeEventListener('touchmove', handleGlobalTouchMove, { capture: true });
       window.removeEventListener('touchcancel', handleGlobalTouchCancel, { capture: true });
       window.removeEventListener('touchend', handleGlobalTouchEnd, { capture: true });
-      window.removeEventListener('blur', handleWindowBlur);
+      window.removeEventListener('scroll', handleGlobalScroll, { capture: true });
       window.removeEventListener('focus', handleWindowFocus);
       window.removeEventListener('keydown', handleKeyDown, { capture: true });
       window.removeEventListener('keyup', handleKeyUp, { capture: true });
@@ -423,56 +545,57 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
     antiCheatEnabled,
     isAntiScreenshotEnabled,
     isTouchHoldMode,
-    currentIndex,
-    answers,
-    flagged,
-    seconds,
-    onViolationOccurred,
-    screenshotBlockState.isLocked,
+    hideQuestionCardInstant,
+    revealQuestionCard,
+    triggerInstantScreenshotBlackout,
   ]);
 
   const handleDismissScreenshotLock = () => {
     if (screenshotBlockState.cooldownSeconds > 0) return;
     playClickSound();
     document.body.classList.remove('anti-screenshot-blackout');
-    questionGuardRef.current?.classList.remove('touch-reveal-active');
-    setIsHoldingSingleFinger(false);
+    setIsWindowBlurred(false);
+    setIsMultiTouchShieldActive(false);
     setScreenshotBlockState((prev) => ({
       ...prev,
       isLocked: false,
     }));
+    revealQuestionCard(45000);
   };
 
-  // Synchronous 0ms handlers for 1-finger touch-hold on the Question Card
+  // Synchronous 0ms handlers for 1-finger touch / mouse interaction on the Question Card
   const handleCardTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
     if (!isAntiScreenshotEnabled) return;
+    setIsWindowBlurred(false);
     if (e.touches.length === 1) {
-      questionGuardRef.current?.classList.add('touch-reveal-active');
-      setIsHoldingSingleFinger(true);
+      revealQuestionCard(45000);
     } else if (e.touches.length >= 2) {
-      questionGuardRef.current?.classList.remove('touch-reveal-active');
-      setIsHoldingSingleFinger(false);
+      hideQuestionCardInstant();
+      setIsMultiTouchShieldActive(true);
     }
   };
 
   const handleCardTouchEnd = (e: React.TouchEvent<HTMLDivElement>) => {
     if (!isAntiScreenshotEnabled) return;
-    if (e.touches.length === 0) {
-      questionGuardRef.current?.classList.remove('touch-reveal-active');
-      setIsHoldingSingleFinger(false);
+    if (e.touches.length === 0 && isTouchHoldMode) {
+      revealQuestionCard(45000);
     }
   };
 
   const handleCardMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!isAntiScreenshotEnabled || e.button !== 0) return;
-    questionGuardRef.current?.classList.add('touch-reveal-active');
-    setIsHoldingSingleFinger(true);
+    setIsWindowBlurred(false);
+    revealQuestionCard(45000);
   };
 
-  const handleCardMouseUpOrLeave = () => {
+  const handleCardMouseEnterOrMove = () => {
     if (!isAntiScreenshotEnabled) return;
-    questionGuardRef.current?.classList.remove('touch-reveal-active');
-    setIsHoldingSingleFinger(false);
+    if (isWindowBlurred) {
+      setIsWindowBlurred(false);
+    }
+    if (isTouchHoldMode && !isHoldingSingleFinger) {
+      revealQuestionCard(45000);
+    }
   };
 
   // Timer & Auto-Submit when timeLimitMinutes is reached
@@ -670,8 +793,13 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
   }
 
   return (
-    <div className={`py-4 sm:py-6 max-w-5xl mx-auto px-3 sm:px-6 ${isAntiScreenshotEnabled ? 'anti-screenshot-zone' : ''}`}>
-      {/* Full-Screen Emergency Anti-Screenshot Blackout Lock Overlay */}
+    <div
+      onClick={() => {
+        if (isWindowBlurred) setIsWindowBlurred(false);
+      }}
+      className={`py-4 sm:py-6 max-w-5xl mx-auto px-3 sm:px-6 ${isAntiScreenshotEnabled ? 'anti-screenshot-zone' : ''}`}
+    >
+      {/* Full-Screen Emergency Anti-Screenshot Blackout Lock Overlay (Always visible & clickable outside .anti-screenshot-content) */}
       <AnimatePresence>
         {isAntiScreenshotEnabled && screenshotBlockState.isLocked && (
           <motion.div
@@ -679,7 +807,7 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.05 }}
-            className="fixed inset-0 z-[9999] bg-slate-950 text-white flex flex-col items-center justify-center p-5 text-center select-none"
+            className="anti-screenshot-lock-modal fixed inset-0 z-[9999] bg-slate-950/98 text-white flex flex-col items-center justify-center p-5 text-center select-none"
           >
             <div className="max-w-md w-full bg-slate-900 border-2 border-rose-500/90 rounded-3xl p-6 sm:p-8 shadow-2xl space-y-4">
               <div className="w-16 h-16 rounded-2xl bg-rose-600/20 border border-rose-500/50 text-rose-400 flex items-center justify-center mx-auto animate-pulse">
@@ -697,7 +825,7 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
               </div>
 
               <div className="p-3.5 rounded-2xl bg-rose-950/70 border border-rose-800/80 text-xs text-rose-200 leading-relaxed font-medium">
-                {screenshotBlockState.reason || 'Terdeteksi aktivitas tangkapan layar / multi-sentuh pada HP siswa.'}
+                {screenshotBlockState.reason || 'Terdeteksi aktivitas tangkapan layar / multi-sentuh pada perangkat siswa.'}
               </div>
 
               <div className="p-3 rounded-xl bg-slate-950/90 border border-slate-800 text-[11px] text-slate-300 space-y-1 font-mono">
@@ -709,7 +837,7 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
               </div>
 
               <p className="text-[11px] text-slate-400 leading-relaxed">
-                Demi kejujuran ujian, fitur <strong>Screenshot 3 Jari</strong>, <strong>Tombol Power + Volume</strong>, dan <strong>Rekam Layar</strong> dinonaktifkan. Gunakan <strong>1 jari</strong> saat mengerjakan soal.
+                Demi kejujuran ujian, fitur <strong>Screenshot 3 Jari</strong>, <strong>PrintScreen / Snipping</strong>, dan <strong>Rekam Layar</strong> dinonaktifkan. Gunakan <strong>1 jari</strong> untuk membaca &amp; menggeser (scroll) layar soal.
               </p>
 
               <button
@@ -730,7 +858,7 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
                 ) : (
                   <>
                     <ShieldCheck className="w-4 h-4" />
-                    <span>Saya Mengerti, Kembali ke Soal (Gunakan 1 Jari)</span>
+                    <span>Saya Mengerti, Kembali ke Soal</span>
                   </>
                 )}
               </button>
@@ -930,17 +1058,19 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
       {isAntiScreenshotEnabled && (
         <div
           className={`mb-3.5 sm:mb-4 p-3 sm:p-3.5 rounded-2xl border transition-colors flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 shadow-2xs ${
-            isTouchHoldMode
-              ? isHoldingSingleFinger
-                ? 'bg-emerald-950 text-white border-emerald-600'
-                : 'bg-slate-900 text-white border-amber-500/80'
-              : 'bg-slate-900 text-white border-emerald-500/80'
+            isWindowBlurred || isMultiTouchShieldActive
+              ? 'bg-rose-950 text-white border-rose-500/80'
+              : isTouchHoldMode
+                ? isHoldingSingleFinger
+                  ? 'bg-emerald-950 text-white border-emerald-600'
+                  : 'bg-slate-900 text-white border-amber-500/80'
+                : 'bg-slate-900 text-white border-emerald-500/80'
           }`}
         >
           <div className="flex items-start sm:items-center gap-2.5 min-w-0">
             <div
               className={`w-8 h-8 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center shrink-0 ${
-                isTouchHoldMode && isHoldingSingleFinger
+                !isWindowBlurred && (!isTouchHoldMode || isHoldingSingleFinger)
                   ? 'bg-emerald-500 text-slate-950'
                   : 'bg-amber-500 text-slate-950'
               }`}
@@ -954,50 +1084,78 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
                 </span>
                 <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-white/15 text-amber-300">
                   {isTouchHoldMode
-                    ? 'Tirai Sentuh 1 Jari + Blokir 3 Jari & Tombol'
-                    : 'Sensor Blokir 3 Jari + Watermark ID'}
+                    ? 'Tirai Sentuh 1 Jari + Blokir 3 Jari'
+                    : 'Sensor Otomatis 3 Jari + Watermark ID'}
                 </span>
               </div>
               <p className="text-[11px] text-slate-300 mt-0.5 leading-snug">
-                {isTouchHoldMode
-                  ? isHoldingSingleFinger
-                    ? 'Sensor 1 Jari Aktif: Teks soal terbuka. Lepas jari = soal otomatis disensor kembali dalam 0 detik.'
-                    : 'Tempel & tahan 1 jari pada area soal untuk membaca & menjawab. Sentuhan >1 jari (screenshot) langsung diblokir.'
-                  : 'Layar dilindungi sensor anti-screenshot 3 jari, blokir salin teks, dan watermark identitas siswa.'}
+                {isWindowBlurred
+                  ? 'Layar soal otomatis disensor karena fokus keluar dari halaman ujian. Ketuk area soal untuk membuka kembali.'
+                  : isTouchHoldMode
+                    ? isHoldingSingleFinger
+                      ? 'Tirai Baca Terbuka: Anda dapat menggeser (scroll) layar dengan 1 jari dan memilih jawaban.'
+                      : 'Sentuh / geser dengan 1 jari pada kartu soal untuk membaca & menjawab. Gestur 3 jari screenshot langsung diblokir.'
+                    : 'Layar aman di-scroll dengan 1 jari. Gestur screenshot 3 jari, PrintScreen, dan salin teks otomatis diblokir.'}
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+          <div className="flex items-center gap-2 shrink-0 self-end sm:self-center flex-wrap">
             {screenshotBlockState.blockedCount > 0 && (
               <span className="text-[11px] font-extrabold px-2.5 py-1 rounded-lg bg-rose-600 text-white">
                 Diblokir: {screenshotBlockState.blockedCount}x
               </span>
             )}
-            <span
-              className={`text-[11px] font-bold px-2.5 py-1 rounded-lg flex items-center gap-1.5 ${
-                !isTouchHoldMode || isHoldingSingleFinger
-                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
-                  : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
-              }`}
+            {isTouchHoldMode && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  playClickSound();
+                  if (isHoldingSingleFinger && !isWindowBlurred) {
+                    hideQuestionCardInstant();
+                  } else {
+                    revealQuestionCard(45000);
+                  }
+                }}
+                className={`text-[11px] font-bold px-2.5 py-1 rounded-lg flex items-center gap-1.5 cursor-pointer transition-all ${
+                  isHoldingSingleFinger && !isWindowBlurred
+                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/30'
+                    : 'bg-amber-500 text-slate-950 hover:bg-amber-400 font-extrabold'
+                }`}
+              >
+                {isHoldingSingleFinger && !isWindowBlurred ? (
+                  <>
+                    <ShieldCheck className="w-3.5 h-3.5" />
+                    <span>Tirai Terbuka (Tutup)</span>
+                  </>
+                ) : (
+                  <>
+                    <EyeOff className="w-3.5 h-3.5" />
+                    <span>Buka Tirai Baca</span>
+                  </>
+                )}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                triggerInstantScreenshotBlackout(
+                  `Simulasi Uji Proteksi Anti-Screenshot pada Soal No. ${currentIndex + 1} (Uji Sensor Berhasil — Tidak Dihitung Pelanggaran)`,
+                  false
+                );
+              }}
+              className="text-[11px] font-bold px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-slate-200 border border-white/15 cursor-pointer transition-colors"
+              title="Uji coba tampilan blokir Anti-Screenshot tanpa mencatat pelanggaran ke Dashboard Guru"
             >
-              {!isTouchHoldMode || isHoldingSingleFinger ? (
-                <>
-                  <ShieldCheck className="w-3.5 h-3.5" />
-                  <span>Soal Terbuka</span>
-                </>
-              ) : (
-                <>
-                  <EyeOff className="w-3.5 h-3.5" />
-                  <span>Tahan 1 Jari di Soal</span>
-                </>
-              )}
-            </span>
+              Uji Sensor
+            </button>
           </div>
         </div>
       )}
 
-      {/* Main Question Box */}
+      {/* Main Question Box (.anti-screenshot-content is the target of 0ms synchronous blackout) */}
       <motion.div
         key={currentQuestion.id}
         initial={{ opacity: 0, x: 6 }}
@@ -1009,11 +1167,13 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
         onTouchEnd={handleCardTouchEnd}
         onTouchCancel={handleCardTouchEnd}
         onMouseDown={handleCardMouseDown}
-        onMouseUp={handleCardMouseUpOrLeave}
-        onMouseLeave={handleCardMouseUpOrLeave}
-        className={`bg-white rounded-2xl sm:rounded-3xl p-4 sm:p-7 border border-amber-200 shadow-sm mb-4 sm:mb-6 relative overflow-hidden ${
-          isTouchHoldMode ? 'touch-hold-guard' : ''
-        }`}
+        onMouseEnter={handleCardMouseEnterOrMove}
+        onMouseMove={handleCardMouseEnterOrMove}
+        className={`anti-screenshot-content bg-white rounded-2xl sm:rounded-3xl p-4 sm:p-7 border border-amber-200 shadow-sm mb-4 sm:mb-6 relative overflow-hidden ${
+          isTouchHoldMode || isWindowBlurred || isMultiTouchShieldActive ? 'touch-hold-guard' : ''
+        } ${
+          isHoldingSingleFinger && !isWindowBlurred && !isMultiTouchShieldActive ? 'touch-reveal-active' : ''
+        } ${screenshotBlockState.isLocked ? 'instant-blackout' : ''}`}
       >
         {/* Dynamic Moving Forensic Student Watermark Overlay (Anti-External Camera & Anti-Screenshot) */}
         {isAntiScreenshotEnabled && (
@@ -1034,7 +1194,7 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
                 >
                   {Array.from({ length: 4 }).map((__, colIdx) => (
                     <span key={colIdx} className="mx-4">
-                      DILARANG SCREENSHOT &bull; {student.name} ({student.studentClass} / NO.{student.studentNumber}) &bull; SOAL #{currentIndex + 1} &bull; {formatTime(seconds)}
+                      DILARANG SCREENSHOT &bull; {safeStudentName} ({safeStudentClass} / NO.{safeStudentNumber}) &bull; SOAL #{currentIndex + 1} &bull; {formatTime(seconds)}
                     </span>
                   ))}
                 </div>
@@ -1208,35 +1368,47 @@ export const QuizScreen: React.FC<QuizScreenProps> = ({
           </div>
         )}
 
-        {/* Protected Question & Options Area (Covered by 0ms Touch-Hold Privacy Shield on Student Phone) */}
+        {/* Protected Question & Options Area (Covered by 0ms Touch-Hold / Focus Privacy Shield only when closed) */}
         <div className="relative">
-          {/* Floating Touch-Hold Curtain Banner (pointer-events-none so 1st finger touch passes directly through to options) */}
-          {isTouchHoldMode && (
+          {/* Interactive Touch-Hold or Focus-Loss Privacy Shield Curtain */}
+          {isAntiScreenshotEnabled &&
+            ((isTouchHoldMode && !isHoldingSingleFinger) || isWindowBlurred || isMultiTouchShieldActive) && (
             <div
-              aria-hidden="true"
-              className="touch-curtain-overlay pointer-events-none absolute inset-0 z-30 flex flex-col items-center justify-center p-4 text-center rounded-2xl bg-slate-950/75 backdrop-blur-[2px]"
+              onClick={(e) => {
+                e.stopPropagation();
+                revealQuestionCard(45000);
+              }}
+              className="touch-curtain-overlay cursor-pointer absolute inset-0 z-30 flex flex-col items-center justify-center p-4 text-center rounded-2xl bg-slate-950/80 backdrop-blur-[2px]"
             >
-              <div className="max-w-sm w-full bg-slate-900/95 border-2 border-amber-400/90 rounded-2xl p-4 sm:p-5 shadow-xl text-white space-y-2">
+              <div className="max-w-sm w-full bg-slate-900/95 border-2 border-amber-400/90 rounded-2xl p-4 sm:p-5 shadow-xl text-white space-y-2.5">
                 <div className="w-11 h-11 rounded-2xl bg-amber-500 text-slate-950 flex items-center justify-center mx-auto shadow-md">
                   <Fingerprint className="w-6 h-6 animate-pulse" />
                 </div>
                 <div className="text-xs sm:text-sm font-black uppercase tracking-wide text-amber-300">
-                  Mode Anti-Screenshot HP Siswa
+                  {isWindowBlurred
+                    ? 'Layar Disensor (Fokus Keluar Ujian)'
+                    : 'Mode Anti-Screenshot HP Siswa'}
                 </div>
                 <p className="text-xs sm:text-sm font-bold text-white leading-snug">
-                  Sentuh &amp; Tahan 1 Jari di Sini untuk Membaca Soal &amp; Memilih Jawaban
+                  {isWindowBlurred
+                    ? 'Ketuk / Klik di Sini untuk Membuka Kembali Soal'
+                    : 'Sentuh / Ketuk 1 Jari di Sini untuk Membaca Soal & Memilih Jawaban'}
                 </p>
                 <p className="text-[10.5px] sm:text-[11px] text-slate-300 leading-relaxed">
-                  Saat jari dilepas untuk menekan tombol screenshot HP atau saat terdeteksi &gt;1 jari, soal otomatis tertutup rapat dalam 0 detik.
+                  Gunakan 1 jari untuk menggeser (scroll) &amp; menjawab soal. Sentuhan 3 jari (screenshot) atau pindah aplikasi otomatis menutup soal dalam 0 detik.
                 </p>
-                {currentAnswer && (
-                  <div className="pt-1">
-                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-emerald-500/20 border border-emerald-400/50 text-emerald-300 text-xs font-extrabold">
+                <div className="pt-1 flex flex-wrap items-center justify-center gap-2">
+                  <span className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-amber-500 text-slate-950 text-xs font-extrabold shadow-sm">
+                    <ShieldCheck className="w-3.5 h-3.5" />
+                    <span>Ketuk untuk Buka Tirai Baca</span>
+                  </span>
+                  {currentAnswer && (
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-500/20 border border-emerald-400/50 text-emerald-300 text-xs font-extrabold">
                       <CheckCircle2 className="w-3.5 h-3.5" />
-                      <span>Jawaban Tersimpan di Soal Ini: Opsi {currentAnswer}</span>
+                      <span>Terpilih: Opsi {currentAnswer}</span>
                     </span>
-                  </div>
-                )}
+                  )}
+                </div>
               </div>
             </div>
           )}

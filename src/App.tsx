@@ -630,13 +630,6 @@ export default function App() {
   ) => {
     if (!currentStudent) return;
 
-    // Final guard: reject if student name is used in 2 classes and not registered for this class in Database Siswa/Guru
-    const statusCheck = getStudentAttemptStatus(currentStudent, submissions, studentRestrictions);
-    if (statusCheck.isDatabaseRejected) {
-      setCurrentView('start');
-      return;
-    }
-
     let correctCount = 0;
     questions.forEach(q => {
       if (answers[q.id] === q.correctAnswer) {
@@ -651,19 +644,24 @@ export default function App() {
 
     const actualViolations = violationsCount ?? (violationSession ? violationSession.violationCount : 0);
 
+    const cleanStudentName = (currentStudent.name || 'Siswa').trim().slice(0, 110) || 'Siswa';
+    const cleanStudentClass = (normalizeStudentClass(currentStudent.studentClass) || '7A').slice(0, 25);
+    const cleanStudentNumber = (normalizeStudentNumber(currentStudent.studentNumber) || '1').slice(0, 14);
+
     const newSubmission: QuizSubmission = {
       id: `sub-${Date.now()}`,
-      studentName: currentStudent.name,
-      studentClass: currentStudent.studentClass,
-      studentNumber: currentStudent.studentNumber,
+      studentName: cleanStudentName,
+      studentClass: cleanStudentClass,
+      studentNumber: cleanStudentNumber,
       score,
       totalQuestions: questions.length,
       correctCount,
       wrongCount,
-      answers,
-      timeSpentSeconds,
+      answers: answers || {},
+      timeSpentSeconds: Math.max(0, Math.round(timeSpentSeconds || 0)),
       submittedAt: new Date().toISOString(),
-      violationsCount: actualViolations,
+      violationsCount: Math.max(0, actualViolations || 0),
+      hasSubmitted: true,
     };
 
     // Clean up violation lockout data
@@ -674,12 +672,14 @@ export default function App() {
     setResumedFromViolation(false);
 
     // Identify any pre-input teacher roster placeholders for this student so real exam score replaces them
-    const normCurrentName = normalizeStudentName(currentStudent.name);
+    const normCurrentName = normalizeStudentName(cleanStudentName);
     const preInputIdsToRemove = submissions
       .filter(
         s =>
           isTeacherManualRosterSubmission(s) &&
-          normalizeStudentName(s.studentName) === normCurrentName
+          !s.id.match(/^sub-[1-5]$/) &&
+          normalizeStudentName(s.studentName) === normCurrentName &&
+          normalizeStudentClass(s.studentClass) === cleanStudentClass
       )
       .map(s => s.id);
 
@@ -693,22 +693,28 @@ export default function App() {
 
     // Automatically register this student in Database Siswa/Guru if not yet registered
     const currentRoster = studentRestrictions.registeredStudents ?? INITIAL_REGISTERED_STUDENTS;
-    const normName = normalizeStudentName(currentStudent.name);
-    if (normName && !currentRoster.some(r => normalizeStudentName(r.name) === normName)) {
+    if (
+      normCurrentName &&
+      !currentRoster.some(
+        r =>
+          normalizeStudentName(r.name) === normCurrentName &&
+          normalizeStudentClass(r.studentClass) === cleanStudentClass
+      )
+    ) {
       const updatedRestrictions: StudentRestrictionConfig = {
         ...studentRestrictions,
         registeredStudents: [
           ...currentRoster,
           {
             id: `reg-auto-${Date.now()}`,
-            name: currentStudent.name.trim(),
-            studentClass: normalizeStudentClass(currentStudent.studentClass) || '7A',
-            studentNumber: normalizeStudentNumber(currentStudent.studentNumber) || '1',
+            name: cleanStudentName,
+            studentClass: cleanStudentClass,
+            studentNumber: cleanStudentNumber,
           },
         ],
         updatedAt: new Date().toISOString(),
       };
-      handleUpdateStudentRestrictions(updatedRestrictions);
+      handleUpdateStudentRestrictions(updatedRestrictions).catch(() => {});
     }
 
     // Persist to Firebase Firestore for cross-device sync

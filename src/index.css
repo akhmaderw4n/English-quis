@@ -44,9 +44,14 @@
   -webkit-user-drag: none !important;
 }
 
-/* Mode Tirai Sentuh 1 Jari HP: Sensor otomatis teks soal & jawaban saat jari tidak menyentuh layar */
+/* Pastikan layar kuis tetap nyaman di-scroll vertikal dengan 1 jari di HP */
+.anti-screenshot-zone {
+  touch-action: pan-y;
+}
+
+/* Mode Tirai Sentuh 1 Jari HP: Sensor otomatis teks soal & jawaban hanya saat tirai benar-benar tertutup */
 .touch-hold-guard:not(.touch-reveal-active) .protected-exam-text {
-  filter: blur(16px) contrast(0.12) brightness(0.85) !important;
+  filter: blur(14px) contrast(0.15) brightness(0.88) !important;
   opacity: 0.18 !important;
   transition: none !important;
 }
@@ -58,17 +63,29 @@
 }
 
 .touch-hold-guard.touch-reveal-active .touch-curtain-overlay {
+  display: none !important;
   opacity: 0 !important;
   visibility: hidden !important;
+  pointer-events: none !important;
   transition: none !important;
 }
 
-/* 0ms Synchronous Blackout saat terdeteksi gestur 2/3 jari screenshot, tombol fisik HP, atau kehilangan fokus */
-body.anti-screenshot-blackout .anti-screenshot-zone {
-  filter: brightness(0) blur(32px) !important;
+/* 0ms Synchronous Blackout HANYA pada konten soal (.anti-screenshot-content),
+   sehingga modal peringatan & tombol "Kembali ke Soal" tetap terlihat jelas dan bisa diklik */
+body.anti-screenshot-blackout .anti-screenshot-content,
+.anti-screenshot-content.instant-blackout {
+  filter: brightness(0) blur(28px) !important;
   opacity: 0 !important;
+  visibility: hidden !important;
   pointer-events: none !important;
   transition: none !important;
+}
+
+.anti-screenshot-lock-modal {
+  opacity: 1 !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+  filter: none !important;
 }
 
 /* Print mode optimization for physical printers and PDF export */

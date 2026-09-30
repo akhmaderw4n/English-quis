@@ -66,7 +66,8 @@ export function isTeacherManualRosterSubmission(sub: QuizSubmission | undefined 
     id.startsWith('sub-batch-') ||
     id.startsWith('sub-paste-') ||
     id.startsWith('sub-roster-') ||
-    id.startsWith('reg-unsub-')
+    id.startsWith('reg-unsub-') ||
+    /^sub-[1-5]$/.test(id)
   ) {
     return true;
   }
@@ -272,14 +273,15 @@ export function getStudentAttemptStatus(
       );
 
       if (!matchInSelectedClass) {
-        // Name is registered in another class in Database Siswa/Guru -> REJECT!
         const officialRecord = registeredMatchesByName[0];
-        isCrossClassConflict = true;
         authoritativeClass = normalizeStudentClass(officialRecord.studentClass);
         authoritativeNumber = normalizeStudentNumber(officialRecord.studentNumber);
-        conflictMessage = `DITOLAK: Nama "${student?.name.trim()}" terdata di Database Siswa/Guru pada Kelas ${authoritativeClass}${
-          authoritativeNumber ? ` (No. Absen ${authoritativeNumber})` : ''
-        }. Nama user tidak boleh digunakan di 2 kelas berbeda! Kelas ${cleanClass} ditolak karena tidak terdata di database.`;
+        if (restrictions.enforceRegisteredDatabase) {
+          isCrossClassConflict = true;
+          conflictMessage = `DITOLAK: Nama "${student?.name.trim()}" terdata di Database Siswa/Guru pada Kelas ${authoritativeClass}${
+            authoritativeNumber ? ` (No. Absen ${authoritativeNumber})` : ''
+          }. Silakan pilih Kelas ${authoritativeClass} sesuai database.`;
+        }
       } else {
         // Class matches Database Siswa/Guru!
         const officialNum = normalizeStudentNumber(matchInSelectedClass.studentNumber);
@@ -297,12 +299,14 @@ export function getStudentAttemptStatus(
       const recordedNum = normalizeStudentNumber(firstSub.studentNumber);
 
       if (recordedClass && recordedClass !== cleanClass) {
-        isCrossClassConflict = true;
         authoritativeClass = recordedClass;
         authoritativeNumber = recordedNum;
-        conflictMessage = `DITOLAK: Nama "${student?.name.trim()}" sudah terdata di Database Nilai Guru pada Kelas ${recordedClass}${
-          recordedNum ? ` (No. Absen ${recordedNum})` : ''
-        }. Satu nama user tidak boleh digunakan di 2 kelas! Kelas ${cleanClass} ditolak karena tidak terdata di database.`;
+        if (restrictions.enforceRegisteredDatabase) {
+          isCrossClassConflict = true;
+          conflictMessage = `DITOLAK: Nama "${student?.name.trim()}" sudah terdata di Database Nilai Guru pada Kelas ${recordedClass}${
+            recordedNum ? ` (No. Absen ${recordedNum})` : ''
+          }. Silakan pilih Kelas ${recordedClass}.`;
+        }
       } else {
         isVerifiedInDatabase = true;
         authoritativeClass = recordedClass;
@@ -328,7 +332,8 @@ export function getStudentAttemptStatus(
   const allMatchingByIdentity = isIdentityComplete
     ? submissions.filter((sub) => {
         const sName = normalizeStudentName(sub.studentName);
-        return sName === cleanName;
+        const sClass = normalizeStudentClass(sub.studentClass);
+        return sName === cleanName && (!cleanClass || !sClass || sClass === cleanClass);
       })
     : [];
 

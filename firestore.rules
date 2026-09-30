@@ -31,7 +31,8 @@ service cloud.firestore {
       data.wrongCount is number && data.wrongCount >= 0 && data.wrongCount <= 100 &&
       data.timeSpentSeconds is number && data.timeSpentSeconds >= 0 &&
       data.submittedAt is string && data.submittedAt.size() <= 50 &&
-      (!('violationsCount' in data) || (data.violationsCount is number && data.violationsCount >= 0));
+      (!('violationsCount' in data) || (data.violationsCount is number && data.violationsCount >= 0)) &&
+      (!('hasSubmitted' in data) || (data.hasSubmitted is bool));
     }
 
     function isValidSettings(data) {
@@ -39,6 +40,8 @@ service cloud.firestore {
         (!('teacherPin' in data) || (data.teacherPin is string && data.teacherPin.size() >= 4 && data.teacherPin.size() <= 20)) &&
         (!('questionsJson' in data) || (data.questionsJson is string && data.questionsJson.size() < 1000000)) &&
         (!('procedureTextJson' in data) || (data.procedureTextJson is string && data.procedureTextJson.size() < 1000000)) &&
+        (!('restrictionsJson' in data) || (data.restrictionsJson is string && data.restrictionsJson.size() < 1000000)) &&
+        (!('backgroundJson' in data) || (data.backgroundJson is string && data.backgroundJson.size() < 1000000)) &&
         (!('totalQuestions' in data) || (data.totalQuestions is number && data.totalQuestions >= 0)) &&
         (!('totalTexts' in data) || (data.totalTexts is number && data.totalTexts >= 0)) &&
         (!('updatedAt' in data) || (data.updatedAt is string))

@@ -945,12 +945,12 @@ export const StudentRestrictionPanel: React.FC<StudentRestrictionPanelProps> = (
             {
               id: 'touch_hold',
               title: 'Mode Ketat HP: Tirai Sentuh 1 Jari (Rekomendasi)',
-              desc: 'Soal & opsi disensor otomatis; hanya terbuka saat 1 jari menempel di layar. Lepas jari (untuk tekan tombol screenshot HP) atau sentuh >1 jari (screenshot 3 jari) langsung menutup soal dalam 0 detik.',
+              desc: 'Soal & opsi dilindungi tirai privasi; terbuka saat disentuh / di-scroll 1 jari. Otomatis tertutup rapat dalam 0 detik saat jari dilepas atau terdeteksi gestur screenshot 3 jari & PrintScreen.',
             },
             {
               id: 'auto_sensor',
               title: 'Mode Sensor Otomatis (3 Jari & Watermark)',
-              desc: 'Soal tampil normal tanpa perlu ditahan jari, namun langsung menghitam 0 detik saat mendeteksi gestur 2/3 jari, tarik panel notifikasi/rekam layar, ditambah Watermark Identitas Siswa bergerak.',
+              desc: 'Soal tampil nyaman tanpa tirai saat fokus di layar, namun otomatis disensor saat keluar fokus dan langsung mengunci 0 detik saat mendeteksi screenshot 3 jari, PrintScreen, atau pindah aplikasi.',
             },
             {
               id: 'off',

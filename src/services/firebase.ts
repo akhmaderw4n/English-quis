@@ -227,6 +227,7 @@ export function subscribeToSubmissions(
             timeSpentSeconds: typeof data.timeSpentSeconds === 'number' ? data.timeSpentSeconds : 0,
             submittedAt: data.submittedAt || new Date().toISOString(),
             violationsCount: typeof data.violationsCount === 'number' ? data.violationsCount : 0,
+            ...(typeof data.hasSubmitted === 'boolean' ? { hasSubmitted: data.hasSubmitted } : {}),
           });
         }
       });
@@ -252,29 +253,31 @@ export function subscribeToSubmissions(
  * Save a single submission to Firestore so it syncs immediately across all devices.
  */
 export async function saveSubmissionToFirebase(submission: QuizSubmission): Promise<void> {
-  const docRef = doc(db, SUBMISSIONS_COLLECTION, submission.id);
-  const delRef = doc(db, DELETED_COLLECTION, submission.id);
+  const safeId = String(submission.id || `sub-${Date.now()}`).replace(/[^a-zA-Z0-9_\-]/g, '-').slice(0, 120);
+  const docRef = doc(db, SUBMISSIONS_COLLECTION, safeId);
+  const delRef = doc(db, DELETED_COLLECTION, safeId);
   try {
     const batch = writeBatch(db);
     batch.set(docRef, {
-      id: submission.id,
-      studentName: submission.studentName,
-      studentClass: submission.studentClass,
-      studentNumber: submission.studentNumber,
-      score: submission.score,
-      totalQuestions: submission.totalQuestions,
-      correctCount: submission.correctCount,
-      wrongCount: submission.wrongCount,
-      answers: submission.answers,
-      timeSpentSeconds: submission.timeSpentSeconds,
-      submittedAt: submission.submittedAt,
-      violationsCount: submission.violationsCount || 0,
+      id: safeId,
+      studentName: (submission.studentName || 'Siswa').trim().slice(0, 115) || 'Siswa',
+      studentClass: (submission.studentClass || '7A').trim().slice(0, 25) || '7A',
+      studentNumber: (submission.studentNumber || '1').trim().slice(0, 14) || '1',
+      score: Math.min(100, Math.max(0, Number(submission.score) || 0)),
+      totalQuestions: Math.min(100, Math.max(0, Number(submission.totalQuestions) || 10)),
+      correctCount: Math.min(100, Math.max(0, Number(submission.correctCount) || 0)),
+      wrongCount: Math.min(100, Math.max(0, Number(submission.wrongCount) || 0)),
+      answers: submission.answers || {},
+      timeSpentSeconds: Math.max(0, Math.round(Number(submission.timeSpentSeconds) || 0)),
+      submittedAt: (submission.submittedAt || new Date().toISOString()).slice(0, 45),
+      violationsCount: Math.max(0, Number(submission.violationsCount) || 0),
+      ...(typeof submission.hasSubmitted === 'boolean' ? { hasSubmitted: submission.hasSubmitted } : {}),
     });
     // Remove from tombstone if re-created
     batch.delete(delRef);
     await batch.commit();
   } catch (error) {
-    handleFirestoreError(error, OperationType.CREATE, `${SUBMISSIONS_COLLECTION}/${submission.id}`);
+    handleFirestoreError(error, OperationType.CREATE, `${SUBMISSIONS_COLLECTION}/${safeId}`);
   }
 }
 
@@ -284,22 +287,24 @@ export async function saveSubmissionToFirebase(submission: QuizSubmission): Prom
 export async function saveBatchSubmissionsToFirebase(submissions: QuizSubmission[]): Promise<void> {
   try {
     const batch = writeBatch(db);
-    submissions.forEach((sub) => {
-      const docRef = doc(db, SUBMISSIONS_COLLECTION, sub.id);
-      const delRef = doc(db, DELETED_COLLECTION, sub.id);
+    submissions.forEach((sub, idx) => {
+      const safeId = String(sub.id || `sub-batch-${Date.now()}-${idx}`).replace(/[^a-zA-Z0-9_\-]/g, '-').slice(0, 120);
+      const docRef = doc(db, SUBMISSIONS_COLLECTION, safeId);
+      const delRef = doc(db, DELETED_COLLECTION, safeId);
       batch.set(docRef, {
-        id: sub.id,
-        studentName: sub.studentName,
-        studentClass: sub.studentClass,
-        studentNumber: sub.studentNumber,
-        score: sub.score,
-        totalQuestions: sub.totalQuestions,
-        correctCount: sub.correctCount,
-        wrongCount: sub.wrongCount,
-        answers: sub.answers,
-        timeSpentSeconds: sub.timeSpentSeconds,
-        submittedAt: sub.submittedAt,
-        violationsCount: sub.violationsCount || 0,
+        id: safeId,
+        studentName: (sub.studentName || 'Siswa').trim().slice(0, 115) || 'Siswa',
+        studentClass: (sub.studentClass || '7A').trim().slice(0, 25) || '7A',
+        studentNumber: (sub.studentNumber || '1').trim().slice(0, 14) || '1',
+        score: Math.min(100, Math.max(0, Number(sub.score) || 0)),
+        totalQuestions: Math.min(100, Math.max(0, Number(sub.totalQuestions) || 10)),
+        correctCount: Math.min(100, Math.max(0, Number(sub.correctCount) || 0)),
+        wrongCount: Math.min(100, Math.max(0, Number(sub.wrongCount) || 0)),
+        answers: sub.answers || {},
+        timeSpentSeconds: Math.max(0, Math.round(Number(sub.timeSpentSeconds) || 0)),
+        submittedAt: (sub.submittedAt || new Date().toISOString()).slice(0, 45),
+        violationsCount: Math.max(0, Number(sub.violationsCount) || 0),
+        ...(typeof sub.hasSubmitted === 'boolean' ? { hasSubmitted: sub.hasSubmitted } : {}),
       });
       // Clear tombstone
       batch.delete(delRef);
@@ -428,22 +433,23 @@ export function subscribeToViolations(
  * Report a new student violation to Firestore so it immediately notifies teacher dashboards in real-time.
  */
 export async function reportViolationToFirebase(violation: QuizViolationRecord): Promise<void> {
-  const docRef = doc(db, VIOLATIONS_COLLECTION, violation.id);
+  const safeId = String(violation.id || `viol-${Date.now()}`).replace(/[^a-zA-Z0-9_\-]/g, '-').slice(0, 120);
+  const docRef = doc(db, VIOLATIONS_COLLECTION, safeId);
   try {
     await setDoc(docRef, {
-      id: violation.id,
-      studentName: violation.studentName,
-      studentClass: violation.studentClass,
-      studentNumber: violation.studentNumber,
-      questionNumber: violation.questionNumber,
-      violationCount: violation.violationCount,
-      timestamp: violation.timestamp,
-      unlockToken: violation.unlockToken || '-',
-      reason: violation.reason || 'Terdeteksi membuka tab lain atau meminimalkan browser',
-      status: violation.status,
+      id: safeId,
+      studentName: (violation.studentName || 'Siswa').trim().slice(0, 115) || 'Siswa',
+      studentClass: (violation.studentClass || '7A').trim().slice(0, 25) || '7A',
+      studentNumber: (violation.studentNumber || '1').trim().slice(0, 14) || '1',
+      questionNumber: Math.max(1, Number(violation.questionNumber) || 1),
+      violationCount: Math.max(1, Number(violation.violationCount) || 1),
+      timestamp: violation.timestamp || new Date().toISOString(),
+      unlockToken: (violation.unlockToken || '-').slice(0, 25),
+      reason: (violation.reason || 'Terdeteksi membuka tab lain atau meminimalkan browser').slice(0, 280),
+      status: violation.status === 'unlocked' ? 'unlocked' : 'locked',
     });
   } catch (error) {
-    handleFirestoreError(error, OperationType.CREATE, `${VIOLATIONS_COLLECTION}/${violation.id}`);
+    handleFirestoreError(error, OperationType.CREATE, `${VIOLATIONS_COLLECTION}/${safeId}`);
   }
 }
 
@@ -460,7 +466,7 @@ export async function updateViolationStatusInFirebase(
       docRef,
       {
         status,
-        unlockedAt: status === 'unlocked' ? new Date().toISOString() : undefined,
+        ...(status === 'unlocked' ? { unlockedAt: new Date().toISOString() } : {}),
       },
       { merge: true }
     );

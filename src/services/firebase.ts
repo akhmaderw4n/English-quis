@@ -183,28 +183,36 @@ function mergeRestrictionConfigs(
     const currentTime = currentObj.updatedAt ? new Date(currentObj.updatedAt).getTime() : 0;
     const incomingTime = incomingObj.updatedAt ? new Date(incomingObj.updatedAt).getTime() : 0;
 
-    // Union registeredStudents so neither local nor server/cloud loses inputted class rosters (e.g., 7G)
-    const rosterMap = new Map<string, any>();
+    // Union registeredStudents so newer uploaded roster names replace older names at the same (class, rollNumber) slot
+    const rosterBySlot = new Map<string, any>();
     const olderRoster = incomingTime >= currentTime ? currentObj.registeredStudents : incomingObj.registeredStudents;
     const newerRoster = incomingTime >= currentTime ? incomingObj.registeredStudents : currentObj.registeredStudents;
 
+    const isPlaceholder = (name: string) =>
+      /^nama\s+siswa\s+(?:kelas\s*)?(?:7[a-h]|vii\s*[a-h])?[\s\-_\d]*$/i.test((name || '').trim()) ||
+      /^siswa\s+baru\s+/i.test((name || '').trim());
+
     if (Array.isArray(olderRoster)) {
-      olderRoster.forEach((r: any) => {
-        if (!r || !r.name) return;
-        const k = `${normalizeClassKey(r.studentClass)}__${normalizeNameKey(r.name)}`;
-        rosterMap.set(k, { ...r, studentClass: normalizeClassKey(r.studentClass) });
+      olderRoster.forEach((r: any, idx: number) => {
+        if (!r || !r.name || isPlaceholder(r.name)) return;
+        const cls = normalizeClassKey(r.studentClass);
+        const num = String(parseInt(String(r.studentNumber || ''), 10) || idx + 1);
+        const slotKey = `${cls}__${num}`;
+        rosterBySlot.set(slotKey, { ...r, studentClass: cls, studentNumber: num });
       });
     }
     if (Array.isArray(newerRoster)) {
-      newerRoster.forEach((r: any) => {
-        if (!r || !r.name) return;
-        const k = `${normalizeClassKey(r.studentClass)}__${normalizeNameKey(r.name)}`;
-        rosterMap.set(k, { ...r, studentClass: normalizeClassKey(r.studentClass) });
+      newerRoster.forEach((r: any, idx: number) => {
+        if (!r || !r.name || isPlaceholder(r.name)) return;
+        const cls = normalizeClassKey(r.studentClass);
+        const num = String(parseInt(String(r.studentNumber || ''), 10) || idx + 1);
+        const slotKey = `${cls}__${num}`;
+        rosterBySlot.set(slotKey, { ...r, studentClass: cls, studentNumber: num });
       });
     }
 
     const base = incomingTime >= currentTime ? { ...currentObj, ...incomingObj } : { ...incomingObj, ...currentObj };
-    base.registeredStudents = Array.from(rosterMap.values());
+    base.registeredStudents = Array.from(rosterBySlot.values());
     return JSON.stringify(base);
   } catch {
     return incomingRaw || currentRaw;

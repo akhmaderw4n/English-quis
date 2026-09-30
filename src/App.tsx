@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { ViewState, StudentInfo, QuizSubmission, ViolationLockSession, QuizViolationRecord, Question, ProcedureTextConfig, StudentRestrictionConfig, DashboardBackgroundConfig } from './types';
-import { QUIZ_QUESTIONS, QUIZ_METADATA, ALL_CLASS_LIST, INITIAL_STUDENT_SUBMISSIONS, INITIAL_PROCEDURE_TEXT_CONFIG, INITIAL_STUDENT_RESTRICTION_CONFIG, INITIAL_REGISTERED_STUDENTS, getStudentAttemptStatus, normalizeStudentName, normalizeStudentClass, normalizeStudentNumber, isTeacherManualRosterSubmission } from './data/quizData';
+import { QUIZ_QUESTIONS, QUIZ_METADATA, ALL_CLASS_LIST, INITIAL_STUDENT_SUBMISSIONS, INITIAL_PROCEDURE_TEXT_CONFIG, INITIAL_STUDENT_RESTRICTION_CONFIG, INITIAL_REGISTERED_STUDENTS, getStudentAttemptStatus, normalizeStudentName, normalizeStudentClass, normalizeStudentNumber, isTeacherManualRosterSubmission, isPlaceholderStudentName } from './data/quizData';
 import { INITIAL_DASHBOARD_BACKGROUND_CONFIG, resolveActiveBackgroundImageUrl } from './utils/dashboardBackground';
 import { Navbar } from './components/Navbar';
 import { Footer } from './components/Footer';
@@ -877,26 +877,59 @@ export default function App() {
     if (!Array.isArray(newSubs) || newSubs.length === 0) return;
 
     const normalizedBatch: QuizSubmission[] = newSubs
-      .filter(sub => sub && sub.studentName && sub.studentName.trim().length > 0)
-      .map((sub, idx) => ({
-        ...sub,
-        studentName: sub.studentName.trim(),
-        studentClass: normalizeStudentClass(sub.studentClass) || '7A',
-        studentNumber: (normalizeStudentNumber(sub.studentNumber) || String(idx + 1)).padStart(2, '0'),
-      }));
+      .filter(
+        sub =>
+          sub &&
+          sub.studentName &&
+          sub.studentName.trim().length > 0 &&
+          !isPlaceholderStudentName(sub.studentName)
+      )
+      .map((sub, idx) => {
+        const cleanCls = normalizeStudentClass(sub.studentClass) || '7A';
+        const cleanNum = (normalizeStudentNumber(sub.studentNumber) || String(idx + 1)).padStart(2, '0');
+        return {
+          ...sub,
+          id: sub.id?.startsWith('sub-roster-') ? sub.id : `sub-roster-${cleanCls}-${cleanNum}`,
+          studentName: sub.studentName.trim(),
+          studentClass: cleanCls,
+          studentNumber: cleanNum,
+        };
+      });
 
     if (normalizedBatch.length === 0) return;
 
-    const incomingKeys = new Set(
+    const incomingNameKeys = new Set(
       normalizedBatch.map(
         s => `${normalizeStudentClass(s.studentClass)}__${normalizeStudentName(s.studentName)}`
       )
     );
+    const incomingSlotKeys = new Set(
+      normalizedBatch.map(
+        s => `${normalizeStudentClass(s.studentClass)}__${normalizeStudentNumber(s.studentNumber)}`
+      )
+    );
+    const incomingClasses = new Set(
+      normalizedBatch.map(s => normalizeStudentClass(s.studentClass))
+    );
+    const newIdsSet = new Set(normalizedBatch.map(s => s.id));
+
+    const obsoleteIdsToDelete: string[] = [];
 
     setSubmissions(prev => {
       const filtered = prev.filter(s => {
-        const key = `${normalizeStudentClass(s.studentClass)}__${normalizeStudentName(s.studentName)}`;
-        if (incomingKeys.has(key) && isTeacherManualRosterSubmission(s)) {
+        if (newIdsSet.has(s.id)) return false;
+        const sCls = normalizeStudentClass(s.studentClass);
+        const nameKey = `${sCls}__${normalizeStudentName(s.studentName)}`;
+        const slotKey = `${sCls}__${normalizeStudentNumber(s.studentNumber)}`;
+        const isPlace = isPlaceholderStudentName(s.studentName);
+
+        if (
+          isTeacherManualRosterSubmission(s) &&
+          (incomingNameKeys.has(nameKey) ||
+            incomingSlotKeys.has(slotKey) ||
+            (incomingClasses.has(sCls) && isPlace))
+        ) {
+          obsoleteIdsToDelete.push(s.id);
           return false;
         }
         return true;
@@ -908,36 +941,41 @@ export default function App() {
       return next;
     });
 
-    // Also sync these students into Database Siswa/Guru (registeredStudents) keyed by class + name
+    // Also sync these students into Database Siswa/Guru (registeredStudents), replacing old names at the same (class, absen) slot
     const currentRoster = studentRestrictions.registeredStudents ?? INITIAL_REGISTERED_STUDENTS;
-    const rosterMap = new Map(
-      currentRoster.map(r => [
-        `${normalizeStudentClass(r.studentClass)}__${normalizeStudentName(r.name)}`,
-        r,
-      ])
-    );
+    const cleanedRoster = currentRoster.filter(r => {
+      const rCls = normalizeStudentClass(r.studentClass) || '7A';
+      const rNum = normalizeStudentNumber(r.studentNumber);
+      const rName = normalizeStudentName(r.name);
+      if (isPlaceholderStudentName(r.name)) return false;
+      if (incomingSlotKeys.has(`${rCls}__${rNum}`)) return false;
+      if (incomingNameKeys.has(`${rCls}__${rName}`)) return false;
+      return true;
+    });
+
+    const updatedRoster: typeof currentRoster = [...cleanedRoster];
     normalizedBatch.forEach((sub, idx) => {
-      const norm = normalizeStudentName(sub.studentName);
       const cls = normalizeStudentClass(sub.studentClass) || '7A';
-      if (!norm) return;
-      const key = `${cls}__${norm}`;
-      const existing = rosterMap.get(key);
-      rosterMap.set(key, {
-        id: existing?.id || `reg-batch-${Date.now()}-${idx}`,
+      const num = normalizeStudentNumber(sub.studentNumber) || String(idx + 1);
+      updatedRoster.push({
+        id: `reg-roster-${cls}-${num.padStart(2, '0')}`,
         name: sub.studentName.trim(),
         studentClass: cls,
-        studentNumber: normalizeStudentNumber(sub.studentNumber) || String(idx + 1),
+        studentNumber: num,
       });
     });
 
     handleUpdateStudentRestrictions({
       ...studentRestrictions,
-      registeredStudents: Array.from(rosterMap.values()),
+      registeredStudents: updatedRoster,
       updatedAt: new Date().toISOString(),
     });
 
     try {
       await saveBatchSubmissionsToFirebase(normalizedBatch);
+      for (const oldId of obsoleteIdsToDelete) {
+        await deleteSubmissionFromFirebase(oldId).catch(() => {});
+      }
     } catch (err) {
       console.error('Error adding batch submissions to Firebase:', err);
     }

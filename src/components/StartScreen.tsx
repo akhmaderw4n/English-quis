@@ -26,6 +26,7 @@ import {
   normalizeStudentName,
   normalizeStudentClass,
   normalizeStudentNumber,
+  isPlaceholderStudentName,
 } from '../data/quizData';
 import { playClickSound } from '../utils/audio';
 
@@ -55,36 +56,48 @@ export const StartScreen: React.FC<StartScreenProps> = ({
   const [errorMsg, setErrorMsg] = useState('');
   const [hasUserChangedClass, setHasUserChangedClass] = useState(false);
 
-  // Combine registeredStudents and teacher-input submissions so students from 7G/7H are recognized automatically
+  // Combine registeredStudents and teacher-input submissions so students from 7A-7H match uploaded Nama Lengkap Siswa
   const allKnownRoster = React.useMemo(() => {
-    const map = new Map<string, { id: string; name: string; studentClass: string; studentNumber: string }>();
+    const mapBySlot = new Map<string, { id: string; name: string; studentClass: string; studentNumber: string }>();
+    const seenClassName = new Set<string>();
+
     (restrictions.registeredStudents || []).forEach((r) => {
+      if (isPlaceholderStudentName(r.name)) return;
       const n = normalizeStudentName(r.name);
       const cls = normalizeStudentClass(r.studentClass) || '7A';
-      const key = `${cls}__${n}`;
-      if (n && !map.has(key)) {
-        map.set(key, {
+      const num = normalizeStudentNumber(r.studentNumber) || '1';
+      const slotKey = `${cls}__${num}`;
+      const nameKey = `${cls}__${n}`;
+      if (n) {
+        mapBySlot.set(slotKey, {
           id: r.id,
           name: r.name.replace(/^\d{1,3}[\.\,\;\-\)\s\t]+/, '').trim(),
           studentClass: cls,
-          studentNumber: normalizeStudentNumber(r.studentNumber) || '1',
+          studentNumber: num,
         });
+        seenClassName.add(nameKey);
       }
     });
     submissions.forEach((s) => {
+      if (isPlaceholderStudentName(s.studentName)) return;
       const n = normalizeStudentName(s.studentName);
       const cls = normalizeStudentClass(s.studentClass) || '7A';
-      const key = `${cls}__${n}`;
-      if (n && !map.has(key)) {
-        map.set(key, {
-          id: s.id,
-          name: s.studentName.replace(/^\d{1,3}[\.\,\;\-\)\s\t]+/, '').trim(),
-          studentClass: cls,
-          studentNumber: normalizeStudentNumber(s.studentNumber) || '1',
-        });
+      const num = normalizeStudentNumber(s.studentNumber) || '1';
+      const slotKey = `${cls}__${num}`;
+      const nameKey = `${cls}__${n}`;
+      if (n && (!mapBySlot.has(slotKey) || s.id.startsWith('sub-roster-'))) {
+        if (!seenClassName.has(nameKey) || s.id.startsWith('sub-roster-')) {
+          mapBySlot.set(slotKey, {
+            id: s.id,
+            name: s.studentName.replace(/^\d{1,3}[\.\,\;\-\)\s\t]+/, '').trim(),
+            studentClass: cls,
+            studentNumber: num,
+          });
+          seenClassName.add(nameKey);
+        }
       }
     });
-    const list = Array.from(map.values());
+    const list = Array.from(mapBySlot.values());
     list.sort((a, b) => {
       const clsCmp = a.studentClass.localeCompare(b.studentClass);
       if (clsCmp !== 0) return clsCmp;

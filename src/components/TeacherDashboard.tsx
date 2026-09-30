@@ -44,7 +44,15 @@ import {
   Pencil,
   Plus,
   Sliders,
-  Image as ImageIcon
+  Image as ImageIcon,
+  LayoutDashboard,
+  ChevronLeft,
+  ChevronRight,
+  ChevronDown,
+  FolderDown,
+  Settings,
+  Menu,
+  X
 } from 'lucide-react';
 import { QuizSubmission, QuizViolationRecord, Question, ProcedureTextConfig, StudentRestrictionConfig, DashboardBackgroundConfig } from '../types';
 import {
@@ -61,6 +69,10 @@ import {
   normalizeStudentName,
   normalizeStudentClass,
   normalizeStudentNumber,
+  isPlaceholderStudentName,
+  isTeacherManualRosterSubmission,
+  downloadStudentImportTemplateExcel,
+  downloadStudentImportTemplateCsv,
 } from '../data/quizData';
 import { ReviewModal } from './ReviewModal';
 import { TeacherInputStudent } from './TeacherInputStudent';
@@ -141,6 +153,10 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
   onUpdateDashboardBackground,
 }) => {
   const [activeTab, setActiveTab] = useState<'recap' | 'input' | 'analysis' | 'bank' | 'procedure' | 'restrictions' | 'background' | 'settings' | 'violations'>('recap');
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
+  const [showKpiSummary, setShowKpiSummary] = useState(true);
+  const [sidebarTemplateClass, setSidebarTemplateClass] = useState<string>('7G');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedClass, setSelectedClass] = useState<string>('ALL');
   const [sortField, setSortField] = useState<'absen' | 'score' | 'name' | 'time'>('absen');
@@ -243,29 +259,53 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     }
   };
 
-  // Combine submissions with registered students who haven't taken the quiz yet (scoped by class + name)
+  // Combine submissions with registered students who haven't taken the quiz yet (scoped by class + roll number / name)
   const allStudentRecords = useMemo(() => {
     const mapByKey = new Map<string, QuizSubmission>();
+    const unsubmittedSlotToKey = new Map<string, string>();
+
     submissions.forEach(sub => {
+      if (isPlaceholderStudentName(sub.studentName)) return;
       const norm = normalizeStudentName(sub.studentName);
       if (!norm) return;
       const cls = normalizeStudentClass(sub.studentClass) || '7A';
+      const numPad = (normalizeStudentNumber(sub.studentNumber) || '1').padStart(2, '0');
+      const slotKey = `${cls}__${numPad}`;
       const key = `${cls}__${norm}`;
       const normalizedSub: QuizSubmission = {
         ...sub,
+        studentName: sub.studentName.trim(),
         studentClass: cls,
-        studentNumber: (normalizeStudentNumber(sub.studentNumber) || '1').padStart(2, '0'),
+        studentNumber: numPad,
       };
+      const isSub = hasStudentSubmittedQuiz(normalizedSub);
+
+      // If another unsubmitted manual roster record occupies the same (class, absen) slot, prefer deterministic sub-roster-* or newer record
+      if (!isSub && unsubmittedSlotToKey.has(slotKey)) {
+        const prevKey = unsubmittedSlotToKey.get(slotKey)!;
+        const prevItem = mapByKey.get(prevKey);
+        if (prevItem && !hasStudentSubmittedQuiz(prevItem)) {
+          const preferCurrent =
+            normalizedSub.id.startsWith('sub-roster-') ||
+            new Date(normalizedSub.submittedAt || 0).getTime() >=
+              new Date(prevItem.submittedAt || 0).getTime();
+          if (preferCurrent) {
+            mapByKey.delete(prevKey);
+          } else {
+            return;
+          }
+        }
+      }
+
       const existing = mapByKey.get(key);
       if (!existing) {
         mapByKey.set(key, normalizedSub);
+        if (!isSub) unsubmittedSlotToKey.set(slotKey, key);
       } else {
-        // Prefer submitted over unsubmitted, or higher score
         const existingSub = hasStudentSubmittedQuiz(existing);
-        const currentSub = hasStudentSubmittedQuiz(normalizedSub);
-        if (currentSub && !existingSub) {
+        if (isSub && !existingSub) {
           mapByKey.set(key, normalizedSub);
-        } else if (currentSub && existingSub && normalizedSub.score > existing.score) {
+        } else if (isSub && existingSub && normalizedSub.score > existing.score) {
           mapByKey.set(key, normalizedSub);
         }
       }
@@ -274,18 +314,30 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     const defaultIds = new Set(INITIAL_REGISTERED_STUDENTS.map(r => r.id));
     const registeredList = studentRestrictions.registeredStudents ?? INITIAL_REGISTERED_STUDENTS;
     registeredList.forEach(reg => {
-      // If submissions was completely cleared, don't show the 5 default sample characters unless seeded
       if (submissions.length === 0 && defaultIds.has(reg.id)) return;
+      if (isPlaceholderStudentName(reg.name)) return;
       const norm = normalizeStudentName(reg.name);
       if (!norm) return;
       const cls = normalizeStudentClass(reg.studentClass) || '7A';
+      const numPad = (normalizeStudentNumber(reg.studentNumber) || '1').padStart(2, '0');
+      const slotKey = `${cls}__${numPad}`;
       const key = `${cls}__${norm}`;
       if (mapByKey.has(key)) return;
+
+      // If an old unsubmitted manual entry is at the same (class, absen) slot, update its name to match the registered student
+      if (unsubmittedSlotToKey.has(slotKey)) {
+        const prevKey = unsubmittedSlotToKey.get(slotKey)!;
+        const prevItem = mapByKey.get(prevKey);
+        if (prevItem && !hasStudentSubmittedQuiz(prevItem) && isTeacherManualRosterSubmission(prevItem)) {
+          mapByKey.delete(prevKey);
+        }
+      }
+
       mapByKey.set(key, {
         id: `reg-unsub-${reg.id}`,
-        studentName: reg.name,
+        studentName: reg.name.trim(),
         studentClass: cls,
-        studentNumber: (normalizeStudentNumber(reg.studentNumber) || '1').padStart(2, '0'),
+        studentNumber: numPad,
         score: 0,
         totalQuestions: activeQuestions.length,
         correctCount: 0,
@@ -295,6 +347,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
         submittedAt: '',
         hasSubmitted: false,
       });
+      unsubmittedSlotToKey.set(slotKey, key);
     });
 
     return Array.from(mapByKey.values());
@@ -719,526 +772,862 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
 
   const activeBannerBgUrl = resolveActiveBackgroundImageUrl(dashboardBackground);
 
+  const activeTabTitleMap: Record<typeof activeTab, string> = {
+    recap: 'Rekap Nilai & Daftar Siswa (Kelas 7A – 7H)',
+    input: 'Add New File / Input & Import Data Siswa',
+    analysis: 'Analisis Butir Soal & Statistik Ketuntasan',
+    bank: `Bank Soal Kuis (${activeQuestions.length} Butir Soal)`,
+    procedure: 'Edit Materi Pembelajaran (Descriptive & Procedure Text)',
+    restrictions: 'Package Settings / Batasan Pengerjaan & Database Siswa',
+    background: 'Appearance / Pengaturan Background Dashboard',
+    settings: 'Settings / Pengaturan PIN & Cloud Sync',
+    violations: `Notifikasi Pelanggaran Siswa (${violations.length})`,
+  };
+
   return (
-    <div className="py-4 sm:py-8 max-w-6xl mx-auto px-3.5 sm:px-6">
-      {/* Top Banner */}
-      <div
-        className="bg-slate-900 text-white rounded-2xl sm:rounded-3xl p-4.5 sm:p-8 shadow-xl border border-slate-800 mb-6 sm:mb-8 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 sm:gap-6 relative overflow-hidden"
-        style={
-          dashboardBackground.applyToBanner && activeBannerBgUrl
-            ? {
-                backgroundImage: `linear-gradient(to right, rgba(15, 23, 42, 0.88), rgba(15, 23, 42, 0.72)), url("${activeBannerBgUrl}")`,
-                backgroundSize: 'cover',
-                backgroundPosition: 'center',
-              }
-            : undefined
-        }
-      >
-        <div>
-          <div className="flex flex-wrap items-center gap-2 mb-2 sm:mb-3">
-            <div className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1 rounded-full bg-amber-500/20 text-amber-300 font-bold text-xs border border-amber-500/30">
-              <GraduationCap className="w-4 h-4 text-amber-400 shrink-0" />
-              <span className="truncate">{QUIZ_METADATA.branding}</span>
-            </div>
-            <div className={`inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1 rounded-full text-xs font-semibold border ${
-              isDbConnected 
-                ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' 
-                : 'bg-amber-500/20 text-amber-300 border-amber-500/40'
-            }`}>
-              {isDbConnected ? (
-                <>
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                  <Cloud className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                  <span>Cloud Database: Sinkron Lintas Perangkat</span>
-                </>
-              ) : (
-                <>
-                  <CloudOff className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                  <span>Menghubungkan Database Cloud...</span>
-                </>
-              )}
-            </div>
-          </div>
-          <h1 className="text-xl sm:text-3xl font-extrabold tracking-tight text-slate-100">
-            Dashboard Guru: Rekap &amp; Penilaian
-          </h1>
-          <p className="text-xs sm:text-sm text-slate-300 mt-1 max-w-2xl">
-            Kuis: <strong>Interactive English Quiz: Introducing My self and other</strong> &bull; Bab <strong>"Introducing My self and other" (Materi Descriptive text)</strong> &bull; Buku Siswa <em>English for Nusantara</em> Kelas 7 SMP
-          </p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2.5 w-full md:w-auto justify-end shrink-0">
+    <div className="min-h-[calc(100vh-56px)] flex flex-col bg-[#f0f0f1] text-slate-800">
+      {/* ================================================================= */}
+      {/* TOP DARK ADMIN BAR (WP-ADMIN / WPDM STYLE MATCHING SCREENSHOT)    */}
+      {/* ================================================================= */}
+      <div className="bg-[#1d2327] text-[#c3c4c7] px-3 sm:px-5 h-11 flex items-center justify-between gap-2 text-xs border-b border-black/40 sticky top-0 z-40 select-none">
+        {/* Left Admin Bar Items */}
+        <div className="flex items-center gap-2 sm:gap-4 min-w-0">
           <button
             type="button"
             onClick={() => {
               playClickSound();
-              setActiveTab('background');
+              setIsMobileSidebarOpen((prev) => !prev);
             }}
-            className={`w-full sm:w-auto px-4 py-2.5 rounded-xl font-bold text-xs sm:text-sm transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-xs border ${
-              activeTab === 'background'
-                ? 'bg-amber-500 text-slate-950 border-amber-400'
-                : 'bg-slate-800/90 hover:bg-slate-700 text-white border-slate-700'
-            }`}
-            title="Upload dan ubah gambar background dashboard kapan saja"
+            className="lg:hidden p-1.5 rounded-xs hover:bg-[#2c3338] text-white cursor-pointer"
+            title="Buka Menu"
           >
-            <ImageIcon className="w-4 h-4 text-amber-400" />
-            <span>Ubah Background</span>
+            <Menu className="w-4 h-4" />
           </button>
 
-          <button
-            type="button"
-            onClick={() => {
-              playClickSound();
-              setActiveTab('restrictions');
-            }}
-            className={`w-full sm:w-auto px-4 py-2.5 rounded-xl font-bold text-xs sm:text-sm transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-xs border ${
-              activeTab === 'restrictions'
-                ? 'bg-amber-500 text-slate-950 border-amber-400'
-                : 'bg-slate-800/90 hover:bg-slate-700 text-white border-slate-700'
-            }`}
-          >
-            <Sliders className="w-4 h-4 text-amber-400" />
-            <span>Batasan Pengerjaan Siswa</span>
-            <span className="px-1.5 py-0.5 rounded-full text-[10px] font-black uppercase bg-amber-500/20 text-amber-300 border border-amber-400/30">
-              {studentRestrictions.maxAttempts === 0 ? 'Bebas' : `Maks ${studentRestrictions.maxAttempts}x`}
-            </span>
-          </button>
-
-          <button
-            type="button"
-            onClick={onBackToQuiz}
-            className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 active:scale-98 text-slate-950 font-bold text-xs sm:text-sm transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-xs"
-          >
-            <BookOpen className="w-4 h-4" />
-            <span>Kembali ke Halaman Kuis</span>
-          </button>
-        </div>
-      </div>
-
-      {/* Summary KPI Cards Grid */}
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 sm:gap-4 mb-8">
-        <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-2xs">
-          <div className="flex items-center justify-between text-slate-500 mb-2">
-            <span className="text-xs font-semibold uppercase tracking-wider">Total Siswa</span>
-            <Users className="w-4 h-4 text-blue-600" />
-          </div>
-          <div className="text-2xl sm:text-3xl font-black text-slate-900">
-            {stats.total} <span className="text-xs font-normal text-slate-500">Siswa</span>
-          </div>
-          <span className="text-[11px] text-slate-500 mt-1 block">
-            {stats.submittedCount} Submit &bull; {stats.unsubmittedCount} Belum Mengerjakan
-          </span>
-        </div>
-
-        <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-2xs">
-          <div className="flex items-center justify-between text-slate-500 mb-2">
-            <span className="text-xs font-semibold uppercase tracking-wider">Rata-rata Nilai</span>
-            <TrendingUp className="w-4 h-4 text-amber-600" />
-          </div>
-          <div className="text-2xl sm:text-3xl font-black text-slate-900">
-            {stats.submittedCount > 0 ? stats.avgScore : '—'} <span className="text-xs font-normal text-slate-500">{stats.submittedCount > 0 ? '/ 100' : ''}</span>
-          </div>
-          <span className="text-[11px] text-slate-500 mt-1 block">
-            Dari {stats.submittedCount} siswa yang sudah submit
-          </span>
-        </div>
-
-        <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-2xs">
-          <div className="flex items-center justify-between text-slate-500 mb-2">
-            <span className="text-xs font-semibold uppercase tracking-wider">Ketuntasan (KKM &ge;75)</span>
-            <Award className="w-4 h-4 text-emerald-600" />
-          </div>
-          <div className="text-2xl sm:text-3xl font-black text-emerald-700">
-            {stats.submittedCount > 0 ? `${stats.passedPercent}%` : '—'}
-          </div>
-          <span className="text-[11px] text-slate-500 mt-1 block">
-            {stats.passedCount} Tuntas &bull; {stats.remedialCount} Remedial (&lt;75)
-          </span>
-        </div>
-
-        <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-2xs">
-          <div className="flex items-center justify-between text-slate-500 mb-2">
-            <span className="text-xs font-semibold uppercase tracking-wider">Nilai Tertinggi</span>
-            <CheckCircle2 className="w-4 h-4 text-emerald-500" />
-          </div>
-          <div className="text-2xl sm:text-3xl font-black text-emerald-600">
-            {stats.submittedCount > 0 ? stats.highest : '—'}
-          </div>
-        </div>
-
-        <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-2xs col-span-2 lg:col-span-1">
-          <div className="flex items-center justify-between text-slate-500 mb-2">
-            <span className="text-xs font-semibold uppercase tracking-wider">Nilai Terendah</span>
-            <XCircle className="w-4 h-4 text-rose-500" />
-          </div>
-          <div className="text-2xl sm:text-3xl font-black text-slate-700">
-            {stats.submittedCount > 0 ? stats.lowest : '—'}
-          </div>
-        </div>
-      </div>
-
-      {/* Live Feedback Toast */}
-      {violationToastMsg && (
-        <motion.div
-          initial={{ opacity: 0, y: -10 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="mb-4 p-3.5 rounded-2xl bg-emerald-50 border border-emerald-300 text-emerald-900 text-xs font-semibold flex items-center justify-between gap-3 shadow-xs"
-        >
-          <div className="flex items-center gap-2">
-            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-            <span>{violationToastMsg}</span>
-          </div>
-          <button
-            type="button"
-            onClick={() => setViolationToastMsg(null)}
-            className="text-emerald-700 hover:text-emerald-900 text-xs font-bold cursor-pointer"
-          >
-            ✕
-          </button>
-        </motion.div>
-      )}
-
-      {/* Cross-Class Duplicate Name Alert Banner in Teacher Dashboard */}
-      {crossClassConflicts.length > 0 && activeTab !== 'restrictions' && (
-        <motion.div
-          initial={{ opacity: 0, scale: 0.98 }}
-          animate={{ opacity: 1, scale: 1 }}
-          className="mb-5 p-4 rounded-2xl bg-rose-50 border-2 border-rose-400 text-rose-950 flex flex-col md:flex-row items-start md:items-center justify-between gap-3 shadow-sm"
-        >
-          <div className="flex items-start gap-3">
-            <div className="w-10 h-10 rounded-xl bg-rose-600 text-white flex items-center justify-center shrink-0">
-              <AlertTriangle className="w-5 h-5" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="px-2 py-0.5 rounded-md bg-rose-600 text-white font-black text-[10px] uppercase tracking-wider">
-                  Peringatan Database Siswa/Guru
-                </span>
-                <span className="font-bold text-xs text-rose-900">
-                  Ditemukan {crossClassConflicts.length} Nama User Digunakan di 2 Kelas!
-                </span>
-              </div>
-              <p className="text-xs text-rose-800 mt-1 leading-relaxed">
-                Nama <strong>{crossClassConflicts.map((c) => `${c.displayName} (${c.classesUsed.join(' & ')})`).join(', ')}</strong> terdeteksi digunakan di 2 kelas berbeda. Tolak salah satu kelas yang tidak terdata di Database Siswa/Guru.
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2 shrink-0 self-end md:self-auto flex-wrap">
-            <button
-              type="button"
-              onClick={async () => {
-                playClickSound();
-                let count = 0;
-                for (const conf of crossClassConflicts) {
-                  for (const inv of conf.invalidSubmissions) {
-                    await onDeleteSubmission(inv.id);
-                    count += 1;
-                  }
-                }
-                setDeleteToast(
-                  `Berhasil menolak & menghapus ${count} data siswa pada kelas yang tidak terdata di Database Siswa/Guru.`
-                );
-                setTimeout(() => setDeleteToast(null), 4000);
-              }}
-              className="px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer shadow-xs"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-              <span>Tolak Kelas Tidak Terdata</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                playClickSound();
-                setActiveTab('restrictions');
-              }}
-              className="px-3 py-1.5 rounded-xl bg-white hover:bg-rose-100 text-rose-900 border border-rose-300 font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
-            >
-              <span>Kelola Database Siswa &rarr;</span>
-            </button>
-          </div>
-        </motion.div>
-      )}
-
-      {/* Real-time Notification Banner: Notifikasi Pelanggaran Siswa di Akun Guru */}
-      {lockedViolations.length > 0 && (
-        <motion.div
-          initial={{ opacity: 0, scale: 0.98 }}
-          animate={{ opacity: 1, scale: 1 }}
-          className="mb-5 p-4 rounded-2xl bg-rose-50 border-2 border-rose-400 text-rose-950 flex flex-col md:flex-row items-start md:items-center justify-between gap-3 shadow-md"
-        >
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-rose-600 text-white flex items-center justify-center shrink-0 shadow-xs animate-bounce">
-              <Bell className="w-5 h-5" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="px-2 py-0.5 rounded-md bg-rose-600 text-white font-black text-[10px] uppercase tracking-wider animate-pulse">
-                  Notifikasi Pelanggaran Siswa
-                </span>
-                <span className="font-bold text-xs text-rose-800">
-                  {lockedViolations.length} Notifikasi Baru Belum Dicek
-                </span>
-              </div>
-              {lockedViolations[0] && (
-                <p className="text-xs text-slate-800 mt-1 leading-relaxed">
-                  <strong>{lockedViolations[0].studentName}</strong> (Kelas {lockedViolations[0].studentClass} &bull; Absen {lockedViolations[0].studentNumber}) terdeteksi keluar tab/aplikasi pada <strong>Soal #{lockedViolations[0].questionNumber}</strong> (Pelanggaran ke-{lockedViolations[0].violationCount}).
-                </p>
-              )}
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2 shrink-0 self-end md:self-auto flex-wrap">
-            {lockedViolations[0] && (
-              <button
-                type="button"
-                onClick={() => handleRemoteUnlock(lockedViolations[0].id, lockedViolations[0].studentName)}
-                className="px-3 py-1.5 rounded-xl bg-white hover:bg-emerald-50 text-emerald-800 border border-emerald-300 font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
-              >
-                <Check className="w-3.5 h-3.5 text-emerald-600" />
-                <span>Tandai Sudah Dicek</span>
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => {
-                playClickSound();
-                setActiveTab('violations');
-              }}
-              className="px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs flex items-center gap-1.5 transition-all shadow-xs cursor-pointer"
-            >
-              <span>Lihat Notifikasi ({lockedViolations.length}) &rarr;</span>
-            </button>
-          </div>
-        </motion.div>
-      )}
-
-      {/* Tabs Navigation (Horizontally scrollable on mobile for sleek touch experience) */}
-      <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3 border-b border-slate-200 mb-5 sm:mb-6 pb-2">
-        <div className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto no-scrollbar pb-1 -mx-3.5 px-3.5 sm:mx-0 sm:px-0">
           <button
             type="button"
             onClick={() => {
               playClickSound();
               setActiveTab('recap');
             }}
-            className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-1.5 sm:gap-2 transition-all cursor-pointer shrink-0 whitespace-nowrap ${
-              activeTab === 'recap'
-                ? 'bg-amber-500 text-white shadow-xs'
-                : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
-            }`}
+            className="flex items-center gap-2 font-bold text-white hover:text-[#72aee6] transition-colors cursor-pointer truncate"
           >
-            <Table className="w-4 h-4" />
-            <span>Rekap Nilai ({filteredSubmissions.length})</span>
+            <span className="w-6 h-6 rounded-xs bg-[#2271b1] text-white flex items-center justify-center font-black text-[11px] shrink-0">
+              EN
+            </span>
+            <span className="truncate">WPDM · Dashboard Guru</span>
           </button>
 
-          {/* Violations Tab Button with Red Live Pulse Indicator */}
+          {/* Quick Counter Pill Icons */}
+          <button
+            type="button"
+            onClick={() => {
+              playClickSound();
+              setActiveTab('recap');
+            }}
+            className="hidden sm:inline-flex items-center gap-1.5 hover:text-white transition-colors cursor-pointer"
+            title="Total Siswa Terdaftar & Submit"
+          >
+            <Users className="w-3.5 h-3.5 text-[#72aee6]" />
+            <span>{stats.total}</span>
+          </button>
+
           <button
             type="button"
             onClick={() => {
               playClickSound();
               setActiveTab('violations');
             }}
-            className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-1.5 sm:gap-2 transition-all cursor-pointer shrink-0 whitespace-nowrap ${
-              activeTab === 'violations'
-                ? 'bg-rose-600 text-white shadow-xs'
-                : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
-            }`}
+            className="inline-flex items-center gap-1.5 hover:text-white transition-colors cursor-pointer"
+            title="Notifikasi Pelanggaran Siswa"
           >
-            <Bell className={`w-4 h-4 ${lockedViolations.length > 0 ? (activeTab === 'violations' ? 'text-white' : 'text-rose-600 animate-pulse') : 'text-slate-400'}`} />
-            <span>Notifikasi Pelanggaran</span>
-            {lockedViolations.length > 0 ? (
-              <span className="px-1.5 py-0.5 rounded-full text-[10px] font-black uppercase bg-rose-500 text-white animate-pulse">
-                {lockedViolations.length} Baru
-              </span>
-            ) : (
-              <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${activeTab === 'violations' ? 'bg-rose-700 text-white' : 'bg-slate-100 text-slate-600'}`}>
-                {violations.length}
-              </span>
-            )}
-          </button>
-
-          {/* Batasan Pengerjaan Siswa Tab Button */}
-          <button
-            type="button"
-            onClick={() => {
-              playClickSound();
-              setActiveTab('restrictions');
-            }}
-            className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-1.5 sm:gap-2 transition-all cursor-pointer shrink-0 whitespace-nowrap ${
-              activeTab === 'restrictions'
-                ? 'bg-amber-500 text-white shadow-xs'
-                : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
-            }`}
-          >
-            <Sliders className="w-4 h-4" />
-            <span>Batasan Pengerjaan Siswa</span>
-            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-black uppercase ${
-              activeTab === 'restrictions' ? 'bg-amber-600 text-white' : 'bg-amber-100 text-amber-900'
-            }`}>
-              {studentRestrictions.maxAttempts === 0 ? 'Bebas' : `Maks ${studentRestrictions.maxAttempts}x`}
+            <Bell
+              className={`w-3.5 h-3.5 ${
+                lockedViolations.length > 0 ? 'text-rose-400 animate-pulse' : 'text-[#a7aaad]'
+              }`}
+            />
+            <span
+              className={`px-1.5 py-0.2 rounded-full text-[10px] font-bold ${
+                lockedViolations.length > 0
+                  ? 'bg-rose-600 text-white'
+                  : 'bg-[#2c3338] text-[#c3c4c7]'
+              }`}
+            >
+              {lockedViolations.length}
             </span>
           </button>
 
+          {/* "+ New" Quick Action Button */}
           <button
             type="button"
             onClick={() => {
               playClickSound();
               setActiveTab('input');
             }}
-            className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-1.5 sm:gap-2 transition-all cursor-pointer shrink-0 whitespace-nowrap ${
-              activeTab === 'input'
-                ? 'bg-amber-500 text-white shadow-xs'
-                : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
-            }`}
+            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xs bg-[#2c3338] hover:bg-[#2271b1] text-white font-semibold transition-colors cursor-pointer"
           >
-            <UserPlus className="w-4 h-4" />
-            <span>Input Siswa</span>
-            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-black uppercase ${
-              activeTab === 'input' ? 'bg-amber-600 text-white' : 'bg-amber-100 text-amber-900'
-            }`}>
-              Baru
-            </span>
+            <Plus className="w-3.5 h-3.5" />
+            <span>New / Input Siswa</span>
           </button>
 
-          <button
-            type="button"
-            onClick={() => {
-              playClickSound();
-              setActiveTab('analysis');
-            }}
-            className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-1.5 sm:gap-2 transition-all cursor-pointer shrink-0 whitespace-nowrap ${
-              activeTab === 'analysis'
-                ? 'bg-amber-500 text-white shadow-xs'
-                : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
-            }`}
-          >
-            <BarChart3 className="w-4 h-4" />
-            <span>Analisis Butir Soal</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              playClickSound();
-              setActiveTab('bank');
-            }}
-            className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-1.5 sm:gap-2 transition-all cursor-pointer shrink-0 whitespace-nowrap ${
-              activeTab === 'bank'
-                ? 'bg-amber-500 text-white shadow-xs'
-                : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
-            }`}
-          >
-            <BookOpen className="w-4 h-4" />
-            <span>Bank Soal ({activeQuestions.length})</span>
-            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-black uppercase ${
-              activeTab === 'bank' ? 'bg-amber-600 text-white' : 'bg-amber-100 text-amber-900'
-            }`}>
-              Word
-            </span>
-          </button>
-
-          {/* Edit Procedure Text Tab Button */}
-          <button
-            type="button"
-            onClick={() => {
-              playClickSound();
-              setActiveTab('procedure');
-            }}
-            className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-1.5 sm:gap-2 transition-all cursor-pointer shrink-0 whitespace-nowrap ${
-              activeTab === 'procedure'
-                ? 'bg-amber-500 text-white shadow-xs'
-                : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
-            }`}
-          >
-            <FileText className="w-4 h-4" />
-            <span>Edit Materi Pembelajaran</span>
-            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-black uppercase ${
-              activeTab === 'procedure' ? 'bg-amber-600 text-white' : 'bg-amber-100 text-amber-900'
-            }`}>
-              {(procedureTextConfig?.texts || INITIAL_PROCEDURE_TEXT_CONFIG.texts).length} Teks
-            </span>
-          </button>
-
-          {/* Upload Background Dashboard Tab Button */}
-          <button
-            type="button"
-            onClick={() => {
-              playClickSound();
-              setActiveTab('background');
-            }}
-            className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-1.5 sm:gap-2 transition-all cursor-pointer shrink-0 whitespace-nowrap ${
-              activeTab === 'background'
-                ? 'bg-amber-500 text-white shadow-xs'
-                : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
-            }`}
-          >
-            <ImageIcon className="w-4 h-4" />
-            <span>Background Dashboard</span>
-            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-black uppercase ${
-              activeTab === 'background' ? 'bg-amber-600 text-white' : 'bg-amber-100 text-amber-900'
-            }`}>
-              {dashboardBackground.mode === 'custom'
-                ? 'Upload'
-                : dashboardBackground.mode === 'preset'
-                ? 'Tema'
-                : 'Ubah'}
-            </span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              playClickSound();
-              setActiveTab('settings');
-            }}
-            className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-1.5 sm:gap-2 transition-all cursor-pointer shrink-0 whitespace-nowrap ${
-              activeTab === 'settings'
-                ? 'bg-amber-500 text-white shadow-xs'
-                : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
-            }`}
-          >
-            <KeyRound className="w-4 h-4" />
-            <span>Pengaturan PIN</span>
-          </button>
+          <div className="hidden md:flex items-center gap-1.5 text-[11px]">
+            {isDbConnected ? (
+              <>
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                <span className="text-emerald-300 font-medium">Server &amp; Cloud Sync Aktif</span>
+              </>
+            ) : (
+              <>
+                <CloudOff className="w-3.5 h-3.5 text-amber-400" />
+                <span className="text-amber-300">Mode Lokal Aktif</span>
+              </>
+            )}
+          </div>
         </div>
 
-        {/* Global actions */}
-        <div className="flex items-center gap-2 self-end lg:self-auto shrink-0 flex-wrap justify-end">
+        {/* Right Admin Bar Items ("Howdy, Mr. Admin" + Back to Quiz) */}
+        <div className="flex items-center gap-3 shrink-0">
+          <span className="hidden sm:inline text-xs text-[#c3c4c7]">
+            Halo, <strong className="text-white">{QUIZ_METADATA.teacherName}</strong>
+          </span>
           <button
             type="button"
-            onClick={handleExportExcelWordStyle}
-            disabled={filteredSubmissions.length === 0}
-            className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-semibold text-xs flex items-center gap-1.5 transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-2xs cursor-pointer"
-            title="Download file Excel (.xls)"
+            onClick={onBackToQuiz}
+            className="px-2.5 py-1 rounded-xs bg-[#2271b1] hover:bg-[#135e96] text-white font-semibold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
           >
-            <FileSpreadsheet className="w-4 h-4" />
-            <span>Export Excel</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={handleExportWordRecap}
-            disabled={filteredSubmissions.length === 0}
-            className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-semibold text-xs flex items-center gap-1.5 transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-2xs cursor-pointer"
-            title="Download file Rekap Nilai dalam format Microsoft Word (.doc)"
-          >
-            <FileText className="w-4 h-4" />
-            <span>Export Word (.doc)</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={handlePrint}
-            disabled={filteredSubmissions.length === 0}
-            className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-900 active:scale-95 text-white font-semibold text-xs flex items-center gap-1.5 transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-2xs cursor-pointer"
-            title="Pratinjau & Cetak Laporan Penilaian (Tampilan Kertas Word / Excel Siap Print)"
-          >
-            <Printer className="w-4 h-4" />
-            <span>Cetak Laporan</span>
+            <BookOpen className="w-3.5 h-3.5" />
+            <span>Halaman Kuis Siswa</span>
           </button>
         </div>
       </div>
+
+      {/* ================================================================= */}
+      {/* BODY: LEFT DARK SIDEBAR MENU + RIGHT MAIN WORKSPACE               */}
+      {/* ================================================================= */}
+      <div className="flex-1 flex relative">
+        {/* Mobile Backdrop */}
+        {isMobileSidebarOpen && (
+          <div
+            onClick={() => setIsMobileSidebarOpen(false)}
+            className="fixed inset-0 bg-black/50 z-30 lg:hidden"
+          />
+        )}
+
+        {/* LEFT VERTICAL DARK SIDEBAR MENU (EXACT MATCH TO SCREENSHOT) */}
+        <aside
+          className={`${
+            isMobileSidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
+          } fixed lg:static inset-y-0 left-0 z-40 bg-[#1d2327] text-[#f0f0f1] transition-all duration-200 flex flex-col justify-between shrink-0 select-none border-r border-black/30 ${
+            isSidebarCollapsed ? 'w-14' : 'w-60'
+          }`}
+        >
+          <div className="py-2 space-y-0.5 overflow-y-auto">
+            {/* 1. Dashboard / Ringkasan Rekap */}
+            <div>
+              <button
+                type="button"
+                onClick={() => {
+                  playClickSound();
+                  setActiveTab('recap');
+                  setIsMobileSidebarOpen(false);
+                }}
+                className={`w-full flex items-center justify-between px-3.5 py-2.5 text-xs font-semibold transition-colors cursor-pointer relative ${
+                  activeTab === 'recap'
+                    ? 'bg-[#2271b1] text-white font-bold'
+                    : 'text-[#c3c4c7] hover:bg-[#2c3338] hover:text-[#72aee6]'
+                }`}
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <LayoutDashboard className="w-4 h-4 shrink-0" />
+                  {!isSidebarCollapsed && <span className="truncate">Dashboard (Rekap Nilai)</span>}
+                </div>
+                {!isSidebarCollapsed && (
+                  <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-black/25 text-white font-mono">
+                    {filteredSubmissions.length}
+                  </span>
+                )}
+              </button>
+
+              {/* Submenu under Dashboard when active */}
+              {!isSidebarCollapsed && activeTab === 'recap' && (
+                <div className="bg-[#2c3338] py-1.5 text-[11px] space-y-0.5 border-l-2 border-[#72aee6]">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      playClickSound();
+                      setSelectedClass('ALL');
+                      setRecapViewMode('table');
+                    }}
+                    className={`w-full text-left px-8 py-1.5 block cursor-pointer ${
+                      selectedClass === 'ALL' && recapViewMode === 'table'
+                        ? 'text-white font-bold'
+                        : 'text-[#c3c4c7] hover:text-white'
+                    }`}
+                  >
+                    Semua Data Siswa ({allStudentRecords.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      playClickSound();
+                      setRecapViewMode(recapViewMode === 'table' ? 'word_print' : 'table');
+                    }}
+                    className={`w-full text-left px-8 py-1.5 block cursor-pointer ${
+                      recapViewMode === 'word_print'
+                        ? 'text-white font-bold'
+                        : 'text-[#c3c4c7] hover:text-white'
+                    }`}
+                  >
+                    Lembar Kertas Cetak (Word)
+                  </button>
+                  <div className="px-8 pt-1 pb-0.5 text-[10px] uppercase tracking-wider text-[#8c8f94] font-bold">
+                    Filter Cepat Kelas:
+                  </div>
+                  <div className="px-7 py-1 grid grid-cols-4 gap-1">
+                    {ALL_CLASS_LIST.map((cls) => (
+                      <button
+                        key={cls}
+                        type="button"
+                        onClick={() => {
+                          playClickSound();
+                          setSelectedClass(cls);
+                        }}
+                        className={`py-1 rounded-xs text-[10px] font-bold text-center cursor-pointer ${
+                          selectedClass === cls
+                            ? 'bg-[#2271b1] text-white'
+                            : 'bg-[#1d2327] text-[#c3c4c7] hover:text-white'
+                        }`}
+                      >
+                        {cls}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* 2. Downloads / Data & Import Siswa (MATCHING "Downloads" ACTIVE SECTION IN SCREENSHOT) */}
+            <div>
+              <button
+                type="button"
+                onClick={() => {
+                  playClickSound();
+                  setActiveTab('input');
+                  setIsMobileSidebarOpen(false);
+                }}
+                className={`w-full flex items-center justify-between px-3.5 py-2.5 text-xs font-semibold transition-colors cursor-pointer relative ${
+                  activeTab === 'input'
+                    ? 'bg-[#2271b1] text-white font-bold'
+                    : 'text-[#c3c4c7] hover:bg-[#2c3338] hover:text-[#72aee6]'
+                }`}
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <FolderDown className="w-4 h-4 shrink-0" />
+                  {!isSidebarCollapsed && <span className="truncate">Downloads / Input Siswa</span>}
+                </div>
+                {!isSidebarCollapsed && (
+                  <span className="px-1.5 py-0.2 rounded-xs text-[10px] bg-emerald-600 text-white font-bold">
+                    7A–7H
+                  </span>
+                )}
+              </button>
+
+              {/* Always-accessible or active submenu matching All Files, Add New, Templates, Categories, Settings */}
+              {!isSidebarCollapsed && (
+                <div className="bg-[#2c3338] py-1.5 text-[11px] space-y-0.5 border-l-2 border-[#2271b1]">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      playClickSound();
+                      setActiveTab('recap');
+                      setIsMobileSidebarOpen(false);
+                    }}
+                    className={`w-full text-left px-8 py-1.5 block cursor-pointer ${
+                      activeTab === 'recap'
+                        ? 'text-white font-bold'
+                        : 'text-[#c3c4c7] hover:text-white'
+                    }`}
+                  >
+                    All Files (Rekap Nilai)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      playClickSound();
+                      setActiveTab('input');
+                      setIsMobileSidebarOpen(false);
+                    }}
+                    className={`w-full text-left px-8 py-1.5 block cursor-pointer ${
+                      activeTab === 'input'
+                        ? 'text-white font-bold'
+                        : 'text-[#c3c4c7] hover:text-white'
+                    }`}
+                  >
+                    Add New (Upload / Import)
+                  </button>
+                  <div className="px-8 py-1.5 space-y-1">
+                    <label className="block text-[10px] uppercase tracking-wider text-[#8c8f94] font-bold">
+                      Pilih Kelas Template:
+                    </label>
+                    <select
+                      value={sidebarTemplateClass}
+                      onChange={(e) => {
+                        playClickSound();
+                        const val = e.target.value;
+                        setSidebarTemplateClass(val);
+                        if (val !== 'ALL') {
+                          setSelectedClass(val);
+                        }
+                      }}
+                      className="w-full px-2 py-1 rounded-xs bg-[#1d2327] border border-[#4f565d] text-white text-[11px] font-bold outline-hidden cursor-pointer"
+                    >
+                      {ALL_CLASS_LIST.map((cls) => (
+                        <option key={cls} value={cls}>
+                          Kelas {cls}
+                        </option>
+                      ))}
+                      <option value="ALL">Semua Kelas (7A–7H)</option>
+                    </select>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      playClickSound();
+                      downloadStudentImportTemplateExcel(32, sidebarTemplateClass);
+                    }}
+                    className="w-full text-left px-8 py-1.5 block text-emerald-300 hover:text-white font-semibold cursor-pointer"
+                  >
+                    Unduh Excel ({sidebarTemplateClass === 'ALL' ? '7A–7H' : `Kelas ${sidebarTemplateClass}`})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      playClickSound();
+                      downloadStudentImportTemplateCsv(32, sidebarTemplateClass);
+                    }}
+                    className="w-full text-left px-8 py-1.5 block text-[#72aee6] hover:text-white font-semibold cursor-pointer"
+                  >
+                    Unduh CSV ({sidebarTemplateClass === 'ALL' ? '7A–7H' : `Kelas ${sidebarTemplateClass}`})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      playClickSound();
+                      setActiveTab('restrictions');
+                      setIsMobileSidebarOpen(false);
+                    }}
+                    className="w-full text-left px-8 py-1.5 block text-[#c3c4c7] hover:text-white cursor-pointer"
+                  >
+                    Categories &amp; Database Siswa
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* 3. Bank Soal Kuis */}
+            <div>
+              <button
+                type="button"
+                onClick={() => {
+                  playClickSound();
+                  setActiveTab('bank');
+                  setIsMobileSidebarOpen(false);
+                }}
+                className={`w-full flex items-center justify-between px-3.5 py-2.5 text-xs font-semibold transition-colors cursor-pointer ${
+                  activeTab === 'bank'
+                    ? 'bg-[#2271b1] text-white font-bold'
+                    : 'text-[#c3c4c7] hover:bg-[#2c3338] hover:text-[#72aee6]'
+                }`}
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <BookOpen className="w-4 h-4 shrink-0" />
+                  {!isSidebarCollapsed && <span className="truncate">Bank Soal Kuis</span>}
+                </div>
+                {!isSidebarCollapsed && (
+                  <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-black/25 text-white font-mono">
+                    {activeQuestions.length}
+                  </span>
+                )}
+              </button>
+
+              {!isSidebarCollapsed && activeTab === 'bank' && (
+                <div className="bg-[#2c3338] py-1.5 text-[11px] space-y-0.5 border-l-2 border-[#72aee6]">
+                  <button
+                    type="button"
+                    onClick={handleStartCreateQuestion}
+                    className="w-full text-left px-8 py-1.5 block text-[#c3c4c7] hover:text-white cursor-pointer"
+                  >
+                    + Tambah Soal Baru
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsWordImportOpen(true)}
+                    className="w-full text-left px-8 py-1.5 block text-[#c3c4c7] hover:text-white cursor-pointer"
+                  >
+                    Import Soal Word (.doc)
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* 4. Edit Materi Pembelajaran */}
+            <button
+              type="button"
+              onClick={() => {
+                playClickSound();
+                setActiveTab('procedure');
+                setIsMobileSidebarOpen(false);
+              }}
+              className={`w-full flex items-center justify-between px-3.5 py-2.5 text-xs font-semibold transition-colors cursor-pointer ${
+                activeTab === 'procedure'
+                  ? 'bg-[#2271b1] text-white font-bold'
+                  : 'text-[#c3c4c7] hover:bg-[#2c3338] hover:text-[#72aee6]'
+              }`}
+            >
+              <div className="flex items-center gap-2.5 min-w-0">
+                <FileText className="w-4 h-4 shrink-0" />
+                {!isSidebarCollapsed && <span className="truncate">Materi Pembelajaran</span>}
+              </div>
+              {!isSidebarCollapsed && (
+                <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-black/25 text-white font-mono">
+                  {(procedureTextConfig?.texts || INITIAL_PROCEDURE_TEXT_CONFIG.texts).length}
+                </span>
+              )}
+            </button>
+
+            {/* 5. Analisis Butir Soal */}
+            <button
+              type="button"
+              onClick={() => {
+                playClickSound();
+                setActiveTab('analysis');
+                setIsMobileSidebarOpen(false);
+              }}
+              className={`w-full flex items-center justify-between px-3.5 py-2.5 text-xs font-semibold transition-colors cursor-pointer ${
+                activeTab === 'analysis'
+                  ? 'bg-[#2271b1] text-white font-bold'
+                  : 'text-[#c3c4c7] hover:bg-[#2c3338] hover:text-[#72aee6]'
+              }`}
+            >
+              <div className="flex items-center gap-2.5 min-w-0">
+                <BarChart3 className="w-4 h-4 shrink-0" />
+                {!isSidebarCollapsed && <span className="truncate">Analisis Butir Soal</span>}
+              </div>
+            </button>
+
+            <div className="my-2 border-t border-white/10" />
+
+            {/* 6. Batasan Pengerjaan Siswa (Package Settings) */}
+            <button
+              type="button"
+              onClick={() => {
+                playClickSound();
+                setActiveTab('restrictions');
+                setIsMobileSidebarOpen(false);
+              }}
+              className={`w-full flex items-center justify-between px-3.5 py-2.5 text-xs font-semibold transition-colors cursor-pointer ${
+                activeTab === 'restrictions'
+                  ? 'bg-[#2271b1] text-white font-bold'
+                  : 'text-[#c3c4c7] hover:bg-[#2c3338] hover:text-[#72aee6]'
+              }`}
+            >
+              <div className="flex items-center gap-2.5 min-w-0">
+                <Sliders className="w-4 h-4 shrink-0" />
+                {!isSidebarCollapsed && <span className="truncate">Batasan Pengerjaan</span>}
+              </div>
+              {!isSidebarCollapsed && (
+                <span className="px-1.5 py-0.2 rounded-xs text-[10px] bg-amber-500/20 text-amber-300 font-bold">
+                  {studentRestrictions.maxAttempts === 0
+                    ? 'Bebas'
+                    : `${studentRestrictions.maxAttempts}x`}
+                </span>
+              )}
+            </button>
+
+            {/* 7. Notifikasi Pelanggaran (with red badge like Plugins 3 in screenshot) */}
+            <button
+              type="button"
+              onClick={() => {
+                playClickSound();
+                setActiveTab('violations');
+                setIsMobileSidebarOpen(false);
+              }}
+              className={`w-full flex items-center justify-between px-3.5 py-2.5 text-xs font-semibold transition-colors cursor-pointer ${
+                activeTab === 'violations'
+                  ? 'bg-[#2271b1] text-white font-bold'
+                  : 'text-[#c3c4c7] hover:bg-[#2c3338] hover:text-[#72aee6]'
+              }`}
+            >
+              <div className="flex items-center gap-2.5 min-w-0">
+                <Bell
+                  className={`w-4 h-4 shrink-0 ${
+                    lockedViolations.length > 0 ? 'text-rose-400 animate-pulse' : ''
+                  }`}
+                />
+                {!isSidebarCollapsed && <span className="truncate">Notifikasi Pelanggaran</span>}
+              </div>
+              {!isSidebarCollapsed && (
+                <span
+                  className={`px-1.5 py-0.2 rounded-full text-[10px] font-bold ${
+                    lockedViolations.length > 0
+                      ? 'bg-[#d63638] text-white animate-pulse'
+                      : 'bg-black/25 text-[#c3c4c7]'
+                  }`}
+                >
+                  {lockedViolations.length > 0 ? lockedViolations.length : violations.length}
+                </span>
+              )}
+            </button>
+
+            {/* 8. Appearance / Background Dashboard */}
+            <button
+              type="button"
+              onClick={() => {
+                playClickSound();
+                setActiveTab('background');
+                setIsMobileSidebarOpen(false);
+              }}
+              className={`w-full flex items-center justify-between px-3.5 py-2.5 text-xs font-semibold transition-colors cursor-pointer ${
+                activeTab === 'background'
+                  ? 'bg-[#2271b1] text-white font-bold'
+                  : 'text-[#c3c4c7] hover:bg-[#2c3338] hover:text-[#72aee6]'
+              }`}
+            >
+              <div className="flex items-center gap-2.5 min-w-0">
+                <ImageIcon className="w-4 h-4 shrink-0" />
+                {!isSidebarCollapsed && <span className="truncate">Appearance / Background</span>}
+              </div>
+            </button>
+
+            {/* 9. Settings / PIN Guru */}
+            <button
+              type="button"
+              onClick={() => {
+                playClickSound();
+                setActiveTab('settings');
+                setIsMobileSidebarOpen(false);
+              }}
+              className={`w-full flex items-center justify-between px-3.5 py-2.5 text-xs font-semibold transition-colors cursor-pointer ${
+                activeTab === 'settings'
+                  ? 'bg-[#2271b1] text-white font-bold'
+                  : 'text-[#c3c4c7] hover:bg-[#2c3338] hover:text-[#72aee6]'
+              }`}
+            >
+              <div className="flex items-center gap-2.5 min-w-0">
+                <Settings className="w-4 h-4 shrink-0" />
+                {!isSidebarCollapsed && <span className="truncate">Settings / PIN Guru</span>}
+              </div>
+            </button>
+          </div>
+
+          {/* Bottom Collapse Menu Button (Matching "Collapse menu" in screenshot) */}
+          <div className="border-t border-white/10 p-2">
+            <button
+              type="button"
+              onClick={() => {
+                playClickSound();
+                setIsSidebarCollapsed((prev) => !prev);
+              }}
+              className="w-full flex items-center gap-2.5 px-2.5 py-2 text-xs text-[#a7aaad] hover:text-white transition-colors cursor-pointer"
+              title={isSidebarCollapsed ? 'Perlebar Menu Samping' : 'Ciutkan Menu Samping'}
+            >
+              {isSidebarCollapsed ? (
+                <ChevronRight className="w-4 h-4 shrink-0" />
+              ) : (
+                <>
+                  <ChevronLeft className="w-4 h-4 shrink-0" />
+                  <span>Collapse menu</span>
+                </>
+              )}
+            </button>
+          </div>
+        </aside>
+
+        {/* ================================================================= */}
+        {/* RIGHT MAIN WORKSPACE CONTENT AREA                                 */}
+        {/* ================================================================= */}
+        <div className="flex-1 min-w-0 p-3.5 sm:p-6 space-y-5">
+          {/* Top Screen Options & Context Header Bar */}
+          <div
+            className="bg-white border border-slate-200 rounded-md px-4 py-3 shadow-2xs flex flex-col md:flex-row md:items-center justify-between gap-3"
+            style={
+              dashboardBackground.applyToBanner && activeBannerBgUrl
+                ? {
+                    backgroundImage: `linear-gradient(to right, rgba(255, 255, 255, 0.94), rgba(255, 255, 255, 0.9)), url("${activeBannerBgUrl}")`,
+                    backgroundSize: 'cover',
+                    backgroundPosition: 'center',
+                  }
+                : undefined
+            }
+          >
+            <div>
+              <div className="flex items-center gap-2 text-xs text-slate-500">
+                <span>{QUIZ_METADATA.branding}</span>
+                <span>·</span>
+                <span>Kelas 7A s/d 7H</span>
+              </div>
+              <h1 className="text-base sm:text-xl font-bold text-slate-900 mt-0.5">
+                {activeTabTitleMap[activeTab]}
+              </h1>
+            </div>
+
+            {/* Right Controls: Screen Options + Export Excel/Word/Print */}
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  playClickSound();
+                  setShowKpiSummary((prev) => !prev);
+                }}
+                className="px-3 py-1.5 rounded-xs bg-[#f6f7f7] hover:bg-slate-200 text-slate-700 border border-slate-300 text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+              >
+                <span>Screen Options</span>
+                <ChevronDown
+                  className={`w-3.5 h-3.5 transition-transform ${
+                    showKpiSummary ? 'rotate-180' : ''
+                  }`}
+                />
+              </button>
+
+              <button
+                type="button"
+                onClick={handleExportExcelWordStyle}
+                disabled={filteredSubmissions.length === 0}
+                className="px-3 py-1.5 rounded-xs bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs flex items-center gap-1.5 transition-all disabled:opacity-40 cursor-pointer"
+                title="Download file Excel (.xls)"
+              >
+                <FileSpreadsheet className="w-3.5 h-3.5" />
+                <span>Export Excel</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleExportWordRecap}
+                disabled={filteredSubmissions.length === 0}
+                className="px-3 py-1.5 rounded-xs bg-[#2271b1] hover:bg-[#135e96] text-white font-semibold text-xs flex items-center gap-1.5 transition-all disabled:opacity-40 cursor-pointer"
+                title="Download file Rekap Nilai dalam format Microsoft Word (.doc)"
+              >
+                <FileText className="w-3.5 h-3.5" />
+                <span>Export Word (.doc)</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handlePrint}
+                disabled={filteredSubmissions.length === 0}
+                className="px-3 py-1.5 rounded-xs bg-slate-800 hover:bg-slate-900 text-white font-semibold text-xs flex items-center gap-1.5 transition-all disabled:opacity-40 cursor-pointer"
+                title="Pratinjau & Cetak Laporan Penilaian"
+              >
+                <Printer className="w-3.5 h-3.5" />
+                <span>Cetak Laporan</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Summary KPI Cards Grid (Collapsible via Screen Options) */}
+          {showKpiSummary && (
+            <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+              <div className="bg-white p-3.5 rounded-md border border-slate-200 shadow-2xs">
+                <div className="flex items-center justify-between text-slate-500 mb-1">
+                  <span className="text-[11px] font-semibold">Total Siswa</span>
+                  <Users className="w-4 h-4 text-[#2271b1]" />
+                </div>
+                <div className="text-xl sm:text-2xl font-black text-slate-900 font-mono">
+                  {stats.total}{' '}
+                  <span className="text-xs font-sans font-normal text-slate-500">Siswa</span>
+                </div>
+                <span className="text-[11px] text-slate-500 mt-0.5 block">
+                  {stats.submittedCount} Submit · {stats.unsubmittedCount} Belum
+                </span>
+              </div>
+
+              <div className="bg-white p-3.5 rounded-md border border-slate-200 shadow-2xs">
+                <div className="flex items-center justify-between text-slate-500 mb-1">
+                  <span className="text-[11px] font-semibold">Rata-rata Nilai</span>
+                  <TrendingUp className="w-4 h-4 text-amber-600" />
+                </div>
+                <div className="text-xl sm:text-2xl font-black text-slate-900 font-mono">
+                  {stats.submittedCount > 0 ? stats.avgScore : '—'}{' '}
+                  <span className="text-xs font-sans font-normal text-slate-500">
+                    {stats.submittedCount > 0 ? '/ 100' : ''}
+                  </span>
+                </div>
+                <span className="text-[11px] text-slate-500 mt-0.5 block">
+                  Dari {stats.submittedCount} siswa submit
+                </span>
+              </div>
+
+              <div className="bg-white p-3.5 rounded-md border border-slate-200 shadow-2xs">
+                <div className="flex items-center justify-between text-slate-500 mb-1">
+                  <span className="text-[11px] font-semibold">Ketuntasan (&ge;75)</span>
+                  <Award className="w-4 h-4 text-emerald-600" />
+                </div>
+                <div className="text-xl sm:text-2xl font-black text-emerald-700 font-mono">
+                  {stats.submittedCount > 0 ? `${stats.passedPercent}%` : '—'}
+                </div>
+                <span className="text-[11px] text-slate-500 mt-0.5 block">
+                  {stats.passedCount} Tuntas · {stats.remedialCount} Remedial
+                </span>
+              </div>
+
+              <div className="bg-white p-3.5 rounded-md border border-slate-200 shadow-2xs">
+                <div className="flex items-center justify-between text-slate-500 mb-1">
+                  <span className="text-[11px] font-semibold">Nilai Tertinggi</span>
+                  <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+                </div>
+                <div className="text-xl sm:text-2xl font-black text-emerald-600 font-mono">
+                  {stats.submittedCount > 0 ? stats.highest : '—'}
+                </div>
+              </div>
+
+              <div className="bg-white p-3.5 rounded-md border border-slate-200 shadow-2xs col-span-2 lg:col-span-1">
+                <div className="flex items-center justify-between text-slate-500 mb-1">
+                  <span className="text-[11px] font-semibold">Nilai Terendah</span>
+                  <XCircle className="w-4 h-4 text-rose-500" />
+                </div>
+                <div className="text-xl sm:text-2xl font-black text-slate-700 font-mono">
+                  {stats.submittedCount > 0 ? stats.lowest : '—'}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Live Feedback Toast */}
+          {violationToastMsg && (
+            <motion.div
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-300 text-emerald-900 text-xs font-semibold flex items-center justify-between gap-3 shadow-2xs"
+            >
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>{violationToastMsg}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setViolationToastMsg(null)}
+                className="text-emerald-700 hover:text-emerald-900 text-xs font-bold cursor-pointer"
+              >
+                ✕
+              </button>
+            </motion.div>
+          )}
+
+          {/* Cross-Class Duplicate Name Alert Banner in Teacher Dashboard */}
+          {crossClassConflicts.length > 0 && activeTab !== 'restrictions' && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.98 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="p-4 rounded-xl bg-rose-50 border border-rose-400 text-rose-950 flex flex-col md:flex-row items-start md:items-center justify-between gap-3 shadow-2xs"
+            >
+              <div className="flex items-start gap-3">
+                <div className="w-9 h-9 rounded-lg bg-rose-600 text-white flex items-center justify-center shrink-0">
+                  <AlertTriangle className="w-5 h-5" />
+                </div>
+                <div>
+                  <span className="font-bold text-xs text-rose-900 block">
+                    Peringatan Database: Ditemukan {crossClassConflicts.length} Nama Siswa Digunakan di 2 Kelas!
+                  </span>
+                  <p className="text-xs text-rose-800 mt-0.5 leading-relaxed">
+                    Nama{' '}
+                    <strong>
+                      {crossClassConflicts
+                        .map((c) => `${c.displayName} (${c.classesUsed.join(' & ')})`)
+                        .join(', ')}
+                    </strong>{' '}
+                    terdeteksi digunakan di 2 kelas berbeda.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0 self-end md:self-auto flex-wrap">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    playClickSound();
+                    let count = 0;
+                    for (const conf of crossClassConflicts) {
+                      for (const inv of conf.invalidSubmissions) {
+                        await onDeleteSubmission(inv.id);
+                        count += 1;
+                      }
+                    }
+                    setDeleteToast(
+                      `Berhasil menolak & menghapus ${count} data siswa pada kelas yang tidak terdata.`
+                    );
+                    setTimeout(() => setDeleteToast(null), 4000);
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Tolak Kelas Tidak Terdata</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    playClickSound();
+                    setActiveTab('restrictions');
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-white hover:bg-rose-100 text-rose-900 border border-rose-300 font-bold text-xs cursor-pointer"
+                >
+                  <span>Kelola Database Siswa &rarr;</span>
+                </button>
+              </div>
+            </motion.div>
+          )}
+
+          {/* Real-time Notification Banner: Notifikasi Pelanggaran Siswa */}
+          {lockedViolations.length > 0 && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.98 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="p-4 rounded-xl bg-rose-50 border border-rose-400 text-rose-950 flex flex-col md:flex-row items-start md:items-center justify-between gap-3 shadow-2xs"
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-lg bg-rose-600 text-white flex items-center justify-center shrink-0">
+                  <Bell className="w-5 h-5" />
+                </div>
+                <div>
+                  <span className="font-bold text-xs text-rose-800 block">
+                    {lockedViolations.length} Notifikasi Pelanggaran Baru Belum Dicek
+                  </span>
+                  {lockedViolations[0] && (
+                    <p className="text-xs text-slate-800 mt-0.5 leading-relaxed">
+                      <strong>{lockedViolations[0].studentName}</strong> (Kelas{' '}
+                      {lockedViolations[0].studentClass} &bull; Absen{' '}
+                      {lockedViolations[0].studentNumber}) keluar tab pada{' '}
+                      <strong>Soal #{lockedViolations[0].questionNumber}</strong>.
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0 self-end md:self-auto flex-wrap">
+                {lockedViolations[0] && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      handleRemoteUnlock(lockedViolations[0].id, lockedViolations[0].studentName)
+                    }
+                    className="px-3 py-1.5 rounded-lg bg-white hover:bg-emerald-50 text-emerald-800 border border-emerald-300 font-bold text-xs flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Check className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>Tandai Sudah Dicek</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    playClickSound();
+                    setActiveTab('violations');
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs cursor-pointer"
+                >
+                  <span>Lihat Notifikasi ({lockedViolations.length}) &rarr;</span>
+                </button>
+              </div>
+            </motion.div>
+          )}
 
       {/* Tab 1: REKAP NILAI SISWA */}
       {activeTab === 'recap' && (
@@ -1866,6 +2255,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
           onViewRecap={() => setActiveTab('recap')}
           existingClasses={availableClasses}
           defaultClass={selectedClass !== 'ALL' ? selectedClass : '7G'}
+          existingSubmissions={allStudentRecords}
         />
       )}
 
@@ -3445,6 +3835,8 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
           </div>
         )}
       </AnimatePresence>
+        </div>
+      </div>
     </div>
   );
 };

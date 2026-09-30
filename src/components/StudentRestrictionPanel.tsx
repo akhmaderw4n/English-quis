@@ -21,7 +21,10 @@ import {
   Trash2,
   Database,
   Smartphone,
-  Fingerprint
+  Fingerprint,
+  Download,
+  Upload,
+  FileSpreadsheet
 } from 'lucide-react';
 import { StudentRestrictionConfig, QuizSubmission, RegisteredStudent } from '../types';
 import {
@@ -35,6 +38,10 @@ import {
   detectCrossClassDuplicateSubmissions,
   hasStudentSubmittedQuiz,
   parseSmartStudentLines,
+  parseUploadedStudentFile,
+  generateStudentImportTemplateText,
+  downloadStudentImportTemplateCsv,
+  downloadStudentImportTemplateExcel,
 } from '../data/quizData';
 import { playClickSound } from '../utils/audio';
 
@@ -69,6 +76,7 @@ export const StudentRestrictionPanel: React.FC<StudentRestrictionPanelProps> = (
   const [bulkPasteMode, setBulkPasteMode] = useState(false);
   const [bulkPasteClass, setBulkPasteClass] = useState('7G');
   const [bulkPasteText, setBulkPasteText] = useState('');
+  const bulkFileInputRef = React.useRef<HTMLInputElement | null>(null);
 
   const registeredStudents = React.useMemo(
     () => config.registeredStudents ?? INITIAL_REGISTERED_STUDENTS,
@@ -427,6 +435,67 @@ export const StudentRestrictionPanel: React.FC<StudentRestrictionPanelProps> = (
         ? `Berhasil menyinkronkan ${addedCount} nama siswa baru ke Database Siswa/Guru`
         : 'Seluruh nama siswa pada rekap nilai sudah terdata di Database Siswa/Guru'
     );
+  };
+
+  const handleUploadBulkRosterFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    playClickSound();
+    const res = await parseUploadedStudentFile(
+      file,
+      bulkPasteClass === 'ALL' ? '7G' : bulkPasteClass
+    );
+    if (res.detectedClassFromFilename) {
+      setBulkPasteClass(res.detectedClassFromFilename);
+    }
+    if (res.rows.length > 0) {
+      setBulkPasteText(res.extractedText);
+      const mapByKey = new Map<string, RegisteredStudent>();
+      registeredStudents.forEach((r) => {
+        const k = `${normalizeStudentClass(r.studentClass)}__${normalizeStudentName(r.name)}`;
+        mapByKey.set(k, {
+          ...r,
+          studentClass: normalizeStudentClass(r.studentClass) || '7A',
+        });
+      });
+
+      let added = 0;
+      res.rows.forEach((row, idx) => {
+        const norm = normalizeStudentName(row.studentName);
+        if (!norm) return;
+        const targetClassNorm =
+          normalizeStudentClass(row.studentClass || res.detectedClassFromFilename || bulkPasteClass) ||
+          '7G';
+        const key = `${targetClassNorm}__${norm}`;
+        const existing = mapByKey.get(key);
+        mapByKey.set(key, {
+          id: existing?.id || `reg-upload-${Date.now()}-${idx}`,
+          name: row.studentName,
+          studentClass: targetClassNorm,
+          studentNumber: normalizeStudentNumber(row.studentNumber) || String(idx + 1),
+        });
+        added += 1;
+      });
+
+      onUpdateConfig({
+        ...config,
+        registeredStudents: Array.from(mapByKey.values()),
+        updatedAt: new Date().toISOString(),
+      });
+      showToast(
+        `Berhasil mengupload & mengimport ${added} data siswa dari file "${file.name}" ke Database Siswa & Rekap Guru!`
+      );
+    } else if (res.isBlankTemplate) {
+      const targetCls = res.emptyTemplateClass || (bulkPasteClass === 'ALL' ? '7G' : bulkPasteClass);
+      setBulkPasteClass(targetCls);
+      setBulkPasteText(generateStudentImportTemplateText(targetCls, res.emptyTemplateRowCount || 32));
+      showToast(
+        `Template "${file.name}" (Kelas ${targetCls}) masih kosong dan telah dimuat ke kolom teks. Silakan isi nama siswa lalu klik Simpan.`
+      );
+    } else {
+      setDbErrorMsg(`File "${file.name}" tidak berisi daftar nama siswa yang valid.`);
+    }
+    e.target.value = '';
   };
 
   const handleSaveBulkPasteRoster = () => {
@@ -1168,29 +1237,86 @@ export const StudentRestrictionPanel: React.FC<StudentRestrictionPanelProps> = (
           <div className="p-4 rounded-xl bg-amber-50/70 border border-amber-200 space-y-3">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <span className="text-xs font-bold text-amber-950">
-                Tempel Daftar Nama Siswa (1 baris 1 nama, contoh: &quot;12. Galang Pratama&quot; atau &quot;Galang Pratama&quot;)
+                Tempel Daftar Nama Siswa (Mendukung 1 kelas atau sekaligus Kelas 7A s/d 7H)
               </span>
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-semibold text-amber-900">Untuk Kelas:</span>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs font-semibold text-amber-900">Pilih Kelas:</span>
                 <select
                   value={bulkPasteClass}
                   onChange={(e) => setBulkPasteClass(e.target.value)}
-                  className="py-1 px-2.5 rounded-lg border border-amber-300 bg-white text-xs font-bold text-slate-800"
+                  className="py-1 px-2.5 rounded-lg border border-amber-400 bg-white text-xs font-bold text-slate-800 cursor-pointer"
                 >
                   {ALL_CLASS_LIST.map((c) => (
                     <option key={c} value={c}>
                       Kelas {c}
                     </option>
                   ))}
+                  <option value="ALL">Semua Kelas (7A–7H)</option>
                 </select>
+                <input
+                  ref={bulkFileInputRef}
+                  type="file"
+                  accept=".xlsx,.xls,.csv,.tsv,.txt,.ods,.docx"
+                  onChange={handleUploadBulkRosterFile}
+                  className="hidden"
+                />
+                <button
+                  type="button"
+                  onClick={() => bulkFileInputRef.current?.click()}
+                  className="py-1 px-2.5 rounded-lg bg-[#46b450] hover:bg-[#3aa044] text-white text-[11px] font-bold flex items-center gap-1 cursor-pointer shadow-2xs"
+                >
+                  <Upload className="w-3 h-3" />
+                  <span>Upload &amp; Import File (.xlsx/.csv)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    playClickSound();
+                    downloadStudentImportTemplateExcel(32, bulkPasteClass);
+                  }}
+                  className="py-1 px-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold flex items-center gap-1 cursor-pointer"
+                >
+                  <Download className="w-3 h-3" />
+                  <span>
+                    Download Excel ({bulkPasteClass === 'ALL' ? '7A–7H' : `Kelas ${bulkPasteClass}`})
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    playClickSound();
+                    downloadStudentImportTemplateCsv(32, bulkPasteClass);
+                  }}
+                  className="py-1 px-2.5 rounded-lg bg-white hover:bg-amber-100 border border-amber-300 text-amber-950 text-[11px] font-bold flex items-center gap-1 cursor-pointer"
+                >
+                  <FileSpreadsheet className="w-3 h-3 text-emerald-700" />
+                  <span>
+                    Download CSV ({bulkPasteClass === 'ALL' ? '7A–7H' : `Kelas ${bulkPasteClass}`})
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    playClickSound();
+                    setBulkPasteText(
+                      generateStudentImportTemplateText(
+                        bulkPasteClass,
+                        bulkPasteClass === 'ALL' ? 5 : 32
+                      )
+                    );
+                  }}
+                  className="py-1 px-2.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-[11px] font-bold cursor-pointer"
+                >
+                  Muat Template ({bulkPasteClass === 'ALL' ? '7A–7H' : `Kelas ${bulkPasteClass}`})
+                </button>
               </div>
             </div>
             <textarea
-              rows={4}
+              rows={5}
               value={bulkPasteText}
               onChange={(e) => setBulkPasteText(e.target.value)}
-              placeholder={`1. Galang Pratama\n2. Monita Rahma\n3. Made Wijaya`}
-              className="w-full p-2.5 rounded-xl border border-amber-300 bg-white text-xs font-medium text-slate-800 outline-hidden focus:border-amber-500"
+              placeholder={`=== KELAS 7A ===\n01, Ahmad Fauzan, 7A\n02, Siti Aisyah, 7A\n\n=== KELAS 7G ===\n01, Budi Utomo, 7G`}
+              className="w-full p-2.5 rounded-xl border border-amber-300 bg-white text-xs font-mono text-slate-800 outline-hidden focus:border-amber-500"
             />
             <div className="flex justify-end gap-2">
               <button
@@ -1205,7 +1331,7 @@ export const StudentRestrictionPanel: React.FC<StudentRestrictionPanelProps> = (
                 onClick={handleSaveBulkPasteRoster}
                 className="px-4 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold cursor-pointer"
               >
-                Simpan Daftar Siswa Kelas {bulkPasteClass}
+                Simpan Daftar Siswa ke Database &amp; Rekap Nilai
               </button>
             </div>
           </div>

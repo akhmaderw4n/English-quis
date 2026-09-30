@@ -1,3 +1,5 @@
+import * as XLSX from 'xlsx';
+import mammoth from 'mammoth';
 import { Question, QuizSubmission, ProcedureTextConfig, ProcedureTextRecipe, StudentRestrictionConfig, StudentInfo, RegisteredStudent } from '../types';
 
 export const ALL_CLASS_LIST = ['7A', '7B', '7C', '7D', '7E', '7F', '7G', '7H'];
@@ -55,62 +57,321 @@ export interface ParsedStudentRow {
   score: number | null;
 }
 
+export function isPlaceholderStudentName(name: string | undefined | null): boolean {
+  const clean = (name || '').trim();
+  if (!clean) return true;
+  return (
+    /^nama\s+siswa\s+(?:kelas\s*)?(?:7[a-h]|vii\s*[a-h])?[\s\-_\d]*$/i.test(clean) ||
+    /^siswa\s+baru\s+/i.test(clean) ||
+    /^\[?\s*isi\s+nama/i.test(clean) ||
+    /^nama[\s_]+lengkap(?:[\s_]+siswa)?$/i.test(clean) ||
+    /^nama[\s_]+siswa$/i.test(clean) ||
+    /^no[\s_\.]*(?:absen|urut)?$/i.test(clean)
+  );
+}
+
+function detectClassTokenStrict(token: string): string | null {
+  const cleaned = String(token || '')
+    .replace(/^["']+|["']+$/g, '')
+    .trim()
+    .toUpperCase()
+    .replace(/^[\=\-\#\[\(\*]+|[\=\-\#\]\)\*]+$/g, '')
+    .trim()
+    .replace(/^KELAS[\s\-_:\.]*/i, '')
+    .replace(/^ROMBEL[\s\-_:\.]*/i, '')
+    .replace(/^VII[\s\-_\.]*/i, '7')
+    .replace(/[\s\-_\.]+/g, '');
+  if (/^7[A-H]$/.test(cleaned)) {
+    return cleaned;
+  }
+  return null;
+}
+
+function splitCsvOrTabLine(line: string): string[] {
+  if (line.includes('\t')) {
+    return line
+      .split('\t')
+      .map((c) => c.replace(/^["']+|["']+$/g, '').trim());
+  }
+  // If semicolon separated (common in Indonesian Excel CSV)
+  const semiCount = (line.match(/;/g) || []).length;
+  const commaCount = (line.match(/,/g) || []).length;
+  const delimiter = semiCount > commaCount ? ';' : ',';
+
+  const result: string[] = [];
+  let current = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      inQuotes = !inQuotes;
+    } else if (ch === delimiter && !inQuotes) {
+      result.push(current.replace(/^["']+|["']+$/g, '').trim());
+      current = '';
+    } else {
+      current += ch;
+    }
+  }
+  result.push(current.replace(/^["']+|["']+$/g, '').trim());
+  return result;
+}
+
 /**
- * Intelligently parses pasted text lines from Excel, Word, WhatsApp, or CSV.
- * Recognizes class headers (e.g. "DAFTAR SISWA KELAS 7G"), class columns ("7G", "VII G"),
+ * Parses a 2D array of cells (from Excel sheet, HTML table, or CSV grid) using header-column detection
+ * so that "Nama Lengkap Siswa" always matches the exact column in the uploaded file.
+ */
+export function parseStructuredTableAoa(
+  aoa: any[][],
+  defaultClass: string = '7G'
+): {
+  rows: ParsedStudentRow[];
+  rawTemplateRowCount: number;
+  lastDetectedClass: string;
+} {
+  let activeClass = normalizeStudentClass(defaultClass) || '7G';
+  const rows: ParsedStudentRow[] = [];
+  const perClassCounter: Record<string, number> = {};
+  let rawTemplateRowCount = 0;
+
+  let headerFound = false;
+  let nameCol = -1;
+  let numCol = -1;
+  let classCol = -1;
+  let scoreCol = -1;
+
+  for (let rIdx = 0; rIdx < aoa.length; rIdx++) {
+    const rawRow = aoa[rIdx];
+    if (!Array.isArray(rawRow)) continue;
+    const cells = rawRow.map((c) =>
+      String(c ?? '')
+        .replace(/\uFEFF/g, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+    );
+    const nonEmpty = cells.filter(Boolean);
+    if (nonEmpty.length === 0) continue;
+
+    // Check if single-cell section header like "=== KELAS 7G ===" or "DAFTAR SISWA KELAS 7B"
+    if (nonEmpty.length === 1) {
+      const singleClean = nonEmpty[0]
+        .replace(/^["'\=\-\#\[\(\*\s]+|["'\=\-\#\]\)\*\s]+$/g, '')
+        .trim();
+      const mSec = singleClean.match(
+        /^(?:DAFTAR\s+)?(?:NAMA\s+)?(?:SISWA\s+)?(?:ROMBEL\s+)?(?:KELAS\s*)?((?:VII|7)[\s\-_]*[A-H])$/i
+      );
+      if (mSec) {
+        const det = detectClassTokenStrict(mSec[1]);
+        if (det) activeClass = det;
+        continue;
+      }
+    }
+
+    // Check if this row is a table header row
+    const lowerCells = cells.map((c) =>
+      c
+        .toLowerCase()
+        .replace(/^["']+|["']+$/g, '')
+        .replace(/[_\-\.]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+    );
+    const candidateNameIdx = lowerCells.findIndex((h) =>
+      /^(?:nama|nama\s*lengkap|nama\s*siswa|nama\s*lengkap\s*siswa|nama\s*peserta|nama\s*peserta\s*didik|student\s*name|full\s*name|peserta\s*didik)$/.test(
+        h
+      ) || (h.includes('nama') && !h.includes('sekolah') && !h.includes('kelas') && !h.includes('guru') && !h.includes('mapel'))
+    );
+
+    if (candidateNameIdx !== -1) {
+      headerFound = true;
+      nameCol = candidateNameIdx;
+      numCol = lowerCells.findIndex((h, idx) =>
+        idx !== nameCol &&
+        (/^(?:no|nomor|urut|no\s*urut|no\s*absen|nomor\s*absen|absen|absensi)$/.test(h) ||
+          (h.includes('absen') && !h.includes('nama')))
+      );
+      classCol = lowerCells.findIndex((h, idx) =>
+        idx !== nameCol && /^(?:kelas|rombel|class|tingkat|kelompok)$/.test(h)
+      );
+      scoreCol = lowerCells.findIndex((h, idx) =>
+        idx !== nameCol && /^(?:nilai|skor|score|nilai\s*opsional|nilai\s*akhir|poin|hasil)$/.test(h)
+      );
+      continue;
+    }
+
+    if (headerFound && nameCol !== -1) {
+      const rawNameCell = (cells[nameCol] || '').replace(/^["']+|["']+$/g, '').trim();
+      const rawNumCell = numCol !== -1 ? (cells[numCol] || '').trim() : '';
+      const rawClassCell = classCol !== -1 ? (cells[classCol] || '').trim() : '';
+      const rawScoreCell = scoreCol !== -1 ? (cells[scoreCol] || '').trim() : '';
+
+      const detectedRowCls =
+        (rawClassCell ? detectClassTokenStrict(rawClassCell) : null) || activeClass;
+      if (rawClassCell && detectClassTokenStrict(rawClassCell)) {
+        activeClass = detectClassTokenStrict(rawClassCell)!;
+      }
+
+      // Check if it's a blank template row (has roll number/class, but name is empty or placeholder)
+      if (!rawNameCell || isPlaceholderStudentName(rawNameCell)) {
+        if (rawNumCell && /^\d{1,3}$/.test(rawNumCell)) {
+          rawTemplateRowCount += 1;
+        }
+        continue;
+      }
+
+      // Clean accidental leading roll number only if there was no dedicated number column
+      const finalName =
+        numCol !== -1
+          ? rawNameCell
+          : rawNameCell.replace(/^\d{1,3}[\.\)\-\s]+\s*/, '').trim();
+
+      if (!finalName || /^[\d\.\-\/\s]+$/.test(finalName)) continue;
+
+      perClassCounter[detectedRowCls] = (perClassCounter[detectedRowCls] || 0) + 1;
+      const parsedNum =
+        rawNumCell && /^\d{1,3}\.?$/.test(rawNumCell)
+          ? String(parseInt(rawNumCell, 10))
+          : String(perClassCounter[detectedRowCls]);
+
+      let scoreVal: number | null = null;
+      if (
+        rawScoreCell &&
+        /^\d{1,3}(?:[\.,]\d+)?$/.test(rawScoreCell) &&
+        parseFloat(rawScoreCell.replace(',', '.')) >= 0 &&
+        parseFloat(rawScoreCell.replace(',', '.')) <= 100
+      ) {
+        scoreVal = Math.round(parseFloat(rawScoreCell.replace(',', '.')));
+      }
+
+      rows.push({
+        studentNumber: parsedNum.padStart(2, '0'),
+        studentName: finalName,
+        studentClass: detectedRowCls,
+        score: scoreVal,
+      });
+    }
+  }
+
+  return {
+    rows,
+    rawTemplateRowCount,
+    lastDetectedClass: activeClass,
+  };
+}
+
+/**
+ * Intelligently parses pasted text lines or uploaded CSV/XLS/TXT files from Excel, Word, WhatsApp, or CSV.
+ * Recognizes class headers (e.g. "=== KELAS 7A ===" .. "=== KELAS 7H ==="), class columns ("7A".."7H", "VII A".."VII H"),
  * roll numbers ("01", "1."), student names, and optional scores.
  */
 export function parseSmartStudentLines(
   rawText: string,
-  defaultClass: string = '7G'
+  defaultClass: string = '7G',
+  allowPlaceholderNames: boolean = false
 ): ParsedStudentRow[] {
-  const lines = (rawText || '')
+  let processedText = rawText || '';
+
+  // Support HTML-based .xls files saved/uploaded from Excel
+  if (/<tr[\s>]/i.test(processedText) && /<td[\s>]/i.test(processedText)) {
+    const trMatches = processedText.match(/<tr[\s\S]*?<\/tr>/gi) || [];
+    const htmlAoa: string[][] = [];
+    trMatches.forEach((tr) => {
+      const tdMatches = tr.match(/<t[dh][\s\S]*?<\/t[dh]>/gi) || [];
+      const cells = tdMatches.map((td) =>
+        td
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/&nbsp;/gi, ' ')
+          .replace(/&amp;/gi, '&')
+          .replace(/\s+/g, ' ')
+          .trim()
+      );
+      if (cells.some(Boolean)) {
+        htmlAoa.push(cells);
+      }
+    });
+    if (htmlAoa.length > 0) {
+      const structured = parseStructuredTableAoa(htmlAoa, defaultClass);
+      if (structured.rows.length > 0) {
+        return structured.rows;
+      }
+      processedText = htmlAoa.map((r) => r.join('\t')).join('\n');
+    }
+  }
+
+  const lines = processedText
     .split(/\r?\n/)
-    .map((l) => l.trim())
+    .map((l) => l.replace(/\uFEFF/g, '').trim())
     .filter(Boolean);
+
+  // First try structured header-based parsing if lines look like CSV/TSV with a header row
+  const gridAoa = lines
+    .filter((l) => !/^[\#\/]{2,}/.test(l))
+    .map((l) => splitCsvOrTabLine(l));
+  const structuredFromText = parseStructuredTableAoa(gridAoa, defaultClass);
+  if (structuredFromText.rows.length > 0) {
+    return structuredFromText.rows;
+  }
 
   let activeClass = normalizeStudentClass(defaultClass) || '7G';
   const results: ParsedStudentRow[] = [];
+  const perClassCounter: Record<string, number> = {};
 
-  const isClassToken = (token: string): string | null => {
-    const cleaned = token
-      .trim()
-      .toUpperCase()
-      .replace(/^KELAS[\s\-_:\.]*/i, '')
-      .replace(/^VII[\s\-_\.]*/i, '7')
-      .replace(/[\s\-_\.]+/g, '');
-    if (/^7[A-H]$/.test(cleaned)) {
-      return cleaned;
-    }
-    return null;
-  };
+  lines.forEach((rawLine) => {
+    const line = rawLine.replace(/[\t,;]+$/, '').trim();
+    if (!line || /^[\#\/]{2,}/.test(line)) return;
 
-  lines.forEach((line) => {
-    // Check if the entire line is a class header like "KELAS 7G" or "DAFTAR NAMA SISWA KELAS VII G"
-    const headerClassMatch = line.match(
-      /^(?:DAFTAR\s+)?(?:NAMA\s+)?(?:SISWA\s+)?KELAS[\s:\-_]*((?:VII|7)[\s\-_]*[A-H])\b/i
-    );
-    if (headerClassMatch && line.split(/[,\t;]/).length === 1 && line.length < 40) {
-      const detected = isClassToken(headerClassMatch[1]);
-      if (detected) activeClass = detected;
-      return;
-    }
-
-    // Skip obvious table header lines like "No, Nama Siswa, Kelas, Nilai"
+    // Skip instruction/title rows from Excel/Word templates
     if (
-      /^(?:no\.?|nomor|absen|no\s*absen|urut)[\s,\t;]+(?:nama|nama\s*siswa|nama\s*lengkap|student)/i.test(
-        line
-      ) ||
-      /^(?:nama|nama\s*siswa|nama\s*lengkap)[\s,\t;]+(?:kelas|nilai|skor)/i.test(line)
+      /^(?:template\s+import|petunjuk\s*:|daftar\s+nilai|rekap\s+nilai|catatan\s*:|keterangan\s*:)/i.test(
+        line.replace(/^["'\=\-\#\[\(\*\s]+/, '')
+      )
     ) {
       return;
     }
 
-    const parts = line
-      .split(/[\t,;]+/)
-      .map((p) => p.trim())
-      .filter(Boolean);
+    // Check if the entire line is a class section header like "=== KELAS 7A ===", "[KELAS 7G]", "DAFTAR SISWA KELAS 7H"
+    const cleanHeaderCandidate = line
+      .replace(/^["'\=\-\#\[\(\*\s]+|["'\=\-\#\]\)\*\s]+$/g, '')
+      .trim();
+    const headerClassMatch = cleanHeaderCandidate.match(
+      /^(?:DAFTAR\s+)?(?:NAMA\s+)?(?:SISWA\s+)?(?:ROMBEL\s+)?(?:KELAS\s*)?((?:VII|7)[\s\-_]*[A-H])\b/i
+    );
+    if (
+      headerClassMatch &&
+      splitCsvOrTabLine(cleanHeaderCandidate).filter(Boolean).length === 1 &&
+      cleanHeaderCandidate.length < 48
+    ) {
+      const detected = detectClassTokenStrict(headerClassMatch[1]);
+      if (detected) activeClass = detected;
+      return;
+    }
+
+    // Skip obvious table header lines
+    const strippedLineForHeader = line.replace(/["']/g, '').trim();
+    if (
+      /^(?:kelas|rombel)?[\s,\t;]*(?:no\.?|nomor|absen|no\.?\s*absen|no_absen|urut)[\s,\t;]+(?:nisn?|nama|nama\s*siswa|nama_lengkap|nama\s*lengkap|student)/i.test(
+        strippedLineForHeader
+      ) ||
+      /^(?:nama|nama\s*siswa|nama\s*lengkap|nama_lengkap_siswa)[\s,\t;]+(?:kelas|no|absen|nilai|skor)/i.test(
+        strippedLineForHeader
+      )
+    ) {
+      return;
+    }
+
+    const parts = splitCsvOrTabLine(line).filter(Boolean);
     if (parts.length === 0) return;
+
+    if (parts.length === 1) {
+      const singleHeader = parts[0].replace(/^[\=\-\#\[\(\*\s]+|[\=\-\#\]\)\*\s]+$/g, '').trim();
+      const mHeader = singleHeader.match(
+        /^(?:DAFTAR\s+)?(?:SISWA\s+)?(?:KELAS\s*)?((?:VII|7)[\s\-_]*[A-H])$/i
+      );
+      if (mHeader) {
+        const c = detectClassTokenStrict(mHeader[1]);
+        if (c) activeClass = c;
+        return;
+      }
+    }
 
     let rowClass = activeClass;
     let rollNum = '';
@@ -118,85 +379,104 @@ export function parseSmartStudentLines(
     let scoreVal: number | null = null;
 
     if (parts.length === 1) {
-      // Single column: could be "01. Ahmad Fauzan - 7G" or "1. Ahmad Fauzan" or "Ahmad Fauzan"
       let single = parts[0];
       const leadingNum = single.match(/^(\d{1,3})[\.\)\-\s]+(.+)$/);
       if (leadingNum) {
-        rollNum = leadingNum[1];
+        rollNum = String(parseInt(leadingNum[1], 10));
         single = leadingNum[2].trim();
       }
-      const trailingClass = single.match(/^(.+?)[\s\-\(\[]+(?:KELAS\s*)?((?:VII|7)[\s\-_]*[A-H])[\)\]]?$/i);
+      const trailingClass = single.match(
+        /^(.+?)[\s\-\(\[]+(?:KELAS\s*)?((?:VII|7)[\s\-_]*[A-H])[\)\]]?$/i
+      );
       if (trailingClass) {
         nameStr = trailingClass[1].trim();
-        const c = isClassToken(trailingClass[2]);
+        const c = detectClassTokenStrict(trailingClass[2]);
         if (c) rowClass = c;
       } else {
         nameStr = single.trim();
       }
     } else {
-      // Multi-column (Tab, Comma, or Semicolon separated)
-      const remaining: string[] = [];
+      const nameParts: string[] = [];
       for (let i = 0; i < parts.length; i++) {
         const p = parts[i];
-        const clsTok = isClassToken(p);
+        const clsTok = detectClassTokenStrict(p);
         if (clsTok) {
           rowClass = clsTok;
           continue;
         }
-        // First numeric token (<= 60) before name is roll number
+        // First numeric token (1..65) before student name is Nomor Absen
         if (
           !rollNum &&
-          !nameStr &&
+          nameParts.length === 0 &&
           /^\d{1,3}\.?$/.test(p) &&
           parseInt(p, 10) >= 1 &&
-          parseInt(p, 10) <= 65 &&
-          i === 0
+          parseInt(p, 10) <= 65
         ) {
           rollNum = String(parseInt(p, 10));
           continue;
         }
+        // Ignore NIS / NISN / numeric ID tokens (e.g. "00918273", "2324.07.001", "102", etc.)
+        if (/^[\d\.\-\/\s]{3,20}$/.test(p)) {
+          continue;
+        }
+        // Ignore Gender tokens ("L", "P", "L/P", "Laki-laki", "Perempuan")
+        if (/^(?:L|P|L\/P|LK|PR|LAKI[\s\-]*LAKI|PEREMPUAN)$/i.test(p)) {
+          continue;
+        }
         // Trailing numeric token after name is score (0..100)
         if (
-          nameStr &&
+          nameParts.length > 0 &&
           scoreVal === null &&
-          /^\d{1,3}$/.test(p) &&
-          parseInt(p, 10) >= 0 &&
-          parseInt(p, 10) <= 100 &&
+          /^\d{1,3}(?:[\.,]\d+)?$/.test(p) &&
+          parseFloat(p.replace(',', '.')) >= 0 &&
+          parseFloat(p.replace(',', '.')) <= 100 &&
           i === parts.length - 1
         ) {
-          scoreVal = parseInt(p, 10);
+          scoreVal = Math.round(parseFloat(p.replace(',', '.')));
           continue;
         }
-        if (p === '-' || p.toLowerCase() === 'kosong' || p.toLowerCase() === 'belum') {
+        if (
+          p === '-' ||
+          p === '—' ||
+          /^(?:kosong|belum|belum\s+mengerjakan|tuntas|remedial|hadir|sakit|izin|alpa)$/i.test(p)
+        ) {
           continue;
         }
-        if (!nameStr) {
-          // Check if first remaining part has leading number like "01. Siti"
+        if (nameParts.length === 0) {
           const m = p.match(/^(\d{1,3})[\.\)\-\s]+(.+)$/);
           if (m && !rollNum) {
             rollNum = String(parseInt(m[1], 10));
-            nameStr = m[2].trim();
+            nameParts.push(m[2].trim());
           } else {
-            nameStr = p;
+            nameParts.push(p);
           }
         } else {
-          remaining.push(p);
+          nameParts.push(p);
         }
       }
-      if (!nameStr && remaining.length > 0) {
-        nameStr = remaining.join(' ');
-      }
+      nameStr = nameParts.join(' ');
     }
 
     const cleanName = nameStr
+      .replace(/^["']+|["']+$/g, '')
       .replace(/^\d{1,3}[\.\,\;\-\)\s\t]+/, '')
       .replace(/[\,\;\t\-]+\s*(?:KELAS\s*)?(?:VII|7)[\s\-_]*[A-H]\s*$/i, '')
       .trim();
 
-    if (!cleanName || /^\d+$/.test(cleanName)) return;
+    if (
+      !cleanName ||
+      /^[\d\.\-\/\s]+$/.test(cleanName) ||
+      (!allowPlaceholderNames && isPlaceholderStudentName(cleanName)) ||
+      /^\.\.\.$/.test(cleanName)
+    ) {
+      return;
+    }
+
+    perClassCounter[rowClass] = (perClassCounter[rowClass] || 0) + 1;
+    const finalNum = rollNum || String(perClassCounter[rowClass]);
 
     results.push({
-      studentNumber: (rollNum || String(results.length + 1)).padStart(2, '0'),
+      studentNumber: finalNum.padStart(2, '0'),
       studentName: cleanName,
       studentClass: rowClass,
       score: scoreVal,
@@ -204,6 +484,320 @@ export function parseSmartStudentLines(
   });
 
   return results;
+}
+
+export interface UploadedStudentFileResult {
+  rows: ParsedStudentRow[];
+  extractedText: string;
+  detectedClassFromFilename: string | null;
+  isBlankTemplate: boolean;
+  emptyTemplateClass: string | null;
+  emptyTemplateRowCount: number;
+}
+
+/**
+ * Parses any uploaded student roster file (.xlsx, .xls, .ods, .csv, .tsv, .txt, .docx)
+ * preserving the exact Nama Lengkap Siswa from the uploaded file.
+ */
+export async function parseUploadedStudentFile(
+  file: File,
+  defaultClass: string = '7G'
+): Promise<UploadedStudentFileResult> {
+  const fileName = file.name || '';
+  const ext = fileName.split('.').pop()?.toLowerCase() || '';
+
+  // Detect class from filename if present (e.g. "Template_Import_Siswa_Kelas_7G.xlsx" or "Data_7C.csv")
+  let detectedClassFromFilename: string | null = null;
+  const fnClassMatch = fileName.match(
+    /(?:KELAS[\s\-_]*|ROMBEL[\s\-_]*|\b)(7[A-H]|VII[\s\-_]*[A-H])\b/i
+  );
+  if (fnClassMatch && !/7A[\s\-_]*sampai[\s\-_]*7H/i.test(fileName)) {
+    const normFn = normalizeStudentClass(fnClassMatch[1]);
+    if (/^7[A-H]$/.test(normFn)) {
+      detectedClassFromFilename = normFn;
+    }
+  }
+
+  const effectiveDefaultClass =
+    detectedClassFromFilename ||
+    (defaultClass !== 'ALL' ? normalizeStudentClass(defaultClass) : '') ||
+    '7G';
+
+  let combinedTextLines: string[] = [];
+  let rawTemplateRowCount = 0;
+  let lastDetectedHeaderClass: string | null = detectedClassFromFilename;
+
+  const deduplicateRows = (inputRows: ParsedStudentRow[]): ParsedStudentRow[] => {
+    const map = new Map<string, ParsedStudentRow>();
+    inputRows.forEach((r) => {
+      const key = `${r.studentClass}__${r.studentNumber}__${normalizeStudentName(r.studentName)}`;
+      if (!map.has(key)) {
+        map.set(key, r);
+      }
+    });
+    return Array.from(map.values());
+  };
+
+  try {
+    if (ext === 'docx') {
+      const arrayBuffer = await file.arrayBuffer();
+      const res = await mammoth.extractRawText({ arrayBuffer });
+      combinedTextLines = (res.value || '').split(/\r?\n/);
+    } else if (ext === 'xlsx' || ext === 'xls' || ext === 'ods') {
+      const arrayBuffer = await file.arrayBuffer();
+      const firstBytes = new TextDecoder('utf-8').decode(arrayBuffer.slice(0, 512));
+      if (/<html|<table|<tr/i.test(firstBytes)) {
+        const fullHtml = new TextDecoder('utf-8').decode(arrayBuffer);
+        const rows = parseSmartStudentLines(fullHtml, effectiveDefaultClass, false);
+        const trMatches = fullHtml.match(/<tr[\s\S]*?<\/tr>/gi) || [];
+        trMatches.forEach((tr) => {
+          const textOnly = tr.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/gi, ' ').trim();
+          const mCls = textOnly.match(/KELAS\s*(7[A-H])/i);
+          if (mCls) lastDetectedHeaderClass = mCls[1].toUpperCase();
+          if (/^\d{1,2}\s+7[A-H]$/i.test(textOnly)) {
+            rawTemplateRowCount += 1;
+          }
+        });
+        const deduped = deduplicateRows(rows);
+        const formattedText =
+          deduped.length > 0
+            ? deduped
+                .map(
+                  (r) =>
+                    `${r.studentNumber}\t${r.studentName}\t${r.studentClass}${
+                      r.score !== null ? `\t${r.score}` : ''
+                    }`
+                )
+                .join('\n')
+            : '';
+        return {
+          rows: deduped,
+          extractedText: formattedText,
+          detectedClassFromFilename,
+          isBlankTemplate: deduped.length === 0 && rawTemplateRowCount > 0,
+          emptyTemplateClass: lastDetectedHeaderClass || effectiveDefaultClass,
+          emptyTemplateRowCount: rawTemplateRowCount || 32,
+        };
+      }
+
+      // Binary .xlsx / .xls / .ods via SheetJS
+      const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+      const allRows: ParsedStudentRow[] = [];
+
+      workbook.SheetNames.forEach((sheetName) => {
+        const sheet = workbook.Sheets[sheetName];
+        if (!sheet) return;
+
+        let sheetClass = effectiveDefaultClass;
+        const sheetClsMatch = sheetName.match(/(?:KELAS[\s\-_]*)?(7[A-H]|VII[\s\-_]*[A-H])\b/i);
+        if (sheetClsMatch && !/7A.*7H/i.test(sheetName)) {
+          const normS = normalizeStudentClass(sheetClsMatch[1]);
+          if (/^7[A-H]$/.test(normS)) {
+            sheetClass = normS;
+            lastDetectedHeaderClass = normS;
+          }
+        }
+
+        const aoa = XLSX.utils.sheet_to_json<any[]>(sheet, { header: 1, defval: '' });
+        // 1. Try structured header-column extraction first so Nama Lengkap Siswa is read directly from its column
+        const structured = parseStructuredTableAoa(aoa, sheetClass);
+        rawTemplateRowCount += structured.rawTemplateRowCount;
+        if (structured.lastDetectedClass) {
+          lastDetectedHeaderClass = structured.lastDetectedClass;
+        }
+
+        if (structured.rows.length > 0) {
+          allRows.push(...structured.rows);
+        } else {
+          // 2. Fallback to line-by-line smart parsing if sheet has no header row
+          const sheetLines: string[] = [];
+          aoa.forEach((rowArr) => {
+            if (!Array.isArray(rowArr)) return;
+            const cells = rowArr.map((c) => String(c ?? '').trim());
+            if (!cells.some(Boolean)) return;
+            sheetLines.push(cells.filter(Boolean).join('\t'));
+          });
+          const parsedFromSheet = parseSmartStudentLines(sheetLines.join('\n'), sheetClass, false);
+          allRows.push(...parsedFromSheet);
+        }
+      });
+
+      const deduped = deduplicateRows(allRows);
+      const formattedText =
+        deduped.length > 0
+          ? deduped
+              .map(
+                (r) =>
+                  `${r.studentNumber}\t${r.studentName}\t${r.studentClass}${
+                    r.score !== null ? `\t${r.score}` : ''
+                  }`
+              )
+              .join('\n')
+          : '';
+
+      return {
+        rows: deduped,
+        extractedText: formattedText,
+        detectedClassFromFilename,
+        isBlankTemplate: deduped.length === 0 && rawTemplateRowCount > 0,
+        emptyTemplateClass: lastDetectedHeaderClass || effectiveDefaultClass,
+        emptyTemplateRowCount: rawTemplateRowCount || 32,
+      };
+    } else {
+      const text = await file.text();
+      combinedTextLines = text.split(/\r?\n/);
+    }
+  } catch {
+    const text = await file.text();
+    combinedTextLines = text.split(/\r?\n/);
+  }
+
+  combinedTextLines.forEach((l) => {
+    const trimmed = l.trim();
+    const mEmpty = trimmed.match(
+      /^["']?(\d{1,2})["']?[,;\t]+[,;\t]*["']?(?:KELAS\s*)?(7[A-H])["']?[,;\t]*$/i
+    );
+    if (mEmpty) {
+      rawTemplateRowCount += 1;
+      lastDetectedHeaderClass = mEmpty[2].toUpperCase();
+    }
+  });
+
+  const rawJoined = combinedTextLines.join('\n');
+  const parsedRows = deduplicateRows(
+    parseSmartStudentLines(rawJoined, effectiveDefaultClass, false)
+  );
+  const cleanFormattedText =
+    parsedRows.length > 0
+      ? parsedRows
+          .map(
+            (r) =>
+              `${r.studentNumber}\t${r.studentName}\t${r.studentClass}${
+                r.score !== null ? `\t${r.score}` : ''
+              }`
+          )
+          .join('\n')
+      : rawJoined;
+
+  return {
+    rows: parsedRows,
+    extractedText: cleanFormattedText,
+    detectedClassFromFilename,
+    isBlankTemplate: parsedRows.length === 0 && rawTemplateRowCount > 0,
+    emptyTemplateClass: lastDetectedHeaderClass || effectiveDefaultClass,
+    emptyTemplateRowCount: rawTemplateRowCount || 32,
+  };
+}
+
+/**
+ * Generates a ready-to-copy/paste text template for student roster import (Classes 7A to 7H or single class).
+ */
+export function generateStudentImportTemplateText(
+  targetClass: 'ALL' | string = 'ALL',
+  rowsPerClass: number = 5
+): string {
+  const classes = targetClass === 'ALL' ? ALL_CLASS_LIST : [normalizeStudentClass(targetClass) || '7G'];
+  const lines: string[] = [
+    '# TEMPLATE IMPORT DATA SISWA (KELAS 7A - 7H)',
+    '# Format per baris: No_Absen, Nama_Lengkap_Siswa, Kelas',
+    '',
+  ];
+
+  classes.forEach((cls) => {
+    lines.push(`=== KELAS ${cls} ===`);
+    for (let i = 1; i <= rowsPerClass; i++) {
+      const no = String(i).padStart(2, '0');
+      lines.push(`${no}, Nama Siswa ${cls}-${no}, ${cls}`);
+    }
+    lines.push('');
+  });
+
+  return lines.join('\n').trim();
+}
+
+/**
+ * Downloads a CSV template file covering either a selected class (7A-7H) or all classes (ALL).
+ */
+export function downloadStudentImportTemplateCsv(
+  rowsPerClass: number = 32,
+  targetClass: 'ALL' | string = 'ALL'
+): void {
+  const cleanTarget =
+    targetClass === 'ALL' ? 'ALL' : normalizeStudentClass(targetClass) || '7G';
+  const classes = cleanTarget === 'ALL' ? ALL_CLASS_LIST : [cleanTarget];
+
+  const rows: string[] = ['No_Absen,Nama_Lengkap_Siswa,Kelas,Nilai_Opsional'];
+  classes.forEach((cls) => {
+    for (let i = 1; i <= rowsPerClass; i++) {
+      const no = String(i).padStart(2, '0');
+      rows.push(`${no},,Kelas ${cls},`);
+    }
+  });
+  const csvContent = '\uFEFF' + rows.join('\r\n');
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download =
+    cleanTarget === 'ALL'
+      ? 'Template_Import_Siswa_Kelas_7A_sampai_7H.csv'
+      : `Template_Import_Siswa_Kelas_${cleanTarget}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Downloads a native Excel (.xlsx) template file covering either a selected class (7A-7H) or all classes (ALL)
+ * with Nomor Absen, Nama Lengkap Siswa, Kelas, and Nilai Opsional.
+ */
+export function downloadStudentImportTemplateExcel(
+  rowsPerClass: number = 32,
+  targetClass: 'ALL' | string = 'ALL'
+): void {
+  const cleanTarget =
+    targetClass === 'ALL' ? 'ALL' : normalizeStudentClass(targetClass) || '7G';
+  const classes = cleanTarget === 'ALL' ? ALL_CLASS_LIST : [cleanTarget];
+
+  const wb = XLSX.utils.book_new();
+
+  // Build combined sheet + individual class sheets
+  const combinedAoa: (string | number)[][] = [
+    ['No_Absen', 'Nama_Lengkap_Siswa', 'Kelas', 'Nilai_Opsional'],
+  ];
+
+  classes.forEach((cls) => {
+    const classAoa: (string | number)[][] = [
+      ['No_Absen', 'Nama_Lengkap_Siswa', 'Kelas', 'Nilai_Opsional'],
+    ];
+    for (let i = 1; i <= rowsPerClass; i++) {
+      const no = String(i).padStart(2, '0');
+      combinedAoa.push([no, '', cls, '']);
+      classAoa.push([no, '', cls, '']);
+    }
+    if (cleanTarget === 'ALL') {
+      const wsCls = XLSX.utils.aoa_to_sheet(classAoa);
+      wsCls['!cols'] = [{ wch: 12 }, { wch: 36 }, { wch: 12 }, { wch: 16 }];
+      XLSX.utils.book_append_sheet(wb, wsCls, `Kelas ${cls}`);
+    }
+  });
+
+  const mainSheetName = cleanTarget === 'ALL' ? 'Semua_Kelas_7A_7H' : `Kelas ${cleanTarget}`;
+  const wsMain = XLSX.utils.aoa_to_sheet(combinedAoa);
+  wsMain['!cols'] = [{ wch: 12 }, { wch: 36 }, { wch: 12 }, { wch: 16 }];
+
+  // Put main sheet first
+  const existingNames = [...wb.SheetNames];
+  wb.SheetNames = [mainSheetName, ...existingNames];
+  wb.Sheets[mainSheetName] = wsMain;
+
+  const fileName =
+    cleanTarget === 'ALL'
+      ? 'Template_Import_Siswa_Kelas_7A_sampai_7H.xlsx'
+      : `Template_Import_Siswa_Kelas_${cleanTarget}.xlsx`;
+
+  XLSX.writeFile(wb, fileName);
 }
 
 export function normalizeStudentNumber(num: string | undefined | null): string {

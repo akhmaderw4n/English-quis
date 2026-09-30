@@ -48,6 +48,7 @@ import {
 } from 'lucide-react';
 import { QuizSubmission, QuizViolationRecord, Question, ProcedureTextConfig, StudentRestrictionConfig, DashboardBackgroundConfig } from '../types';
 import {
+  ALL_CLASS_LIST,
   QUIZ_QUESTIONS,
   QUIZ_METADATA,
   INITIAL_STUDENT_SUBMISSIONS,
@@ -242,23 +243,30 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     }
   };
 
-  // Combine submissions with registered students who haven't taken the quiz yet
+  // Combine submissions with registered students who haven't taken the quiz yet (scoped by class + name)
   const allStudentRecords = useMemo(() => {
-    const mapByName = new Map<string, QuizSubmission>();
+    const mapByKey = new Map<string, QuizSubmission>();
     submissions.forEach(sub => {
       const norm = normalizeStudentName(sub.studentName);
       if (!norm) return;
-      const existing = mapByName.get(norm);
+      const cls = normalizeStudentClass(sub.studentClass) || '7A';
+      const key = `${cls}__${norm}`;
+      const normalizedSub: QuizSubmission = {
+        ...sub,
+        studentClass: cls,
+        studentNumber: (normalizeStudentNumber(sub.studentNumber) || '1').padStart(2, '0'),
+      };
+      const existing = mapByKey.get(key);
       if (!existing) {
-        mapByName.set(norm, sub);
+        mapByKey.set(key, normalizedSub);
       } else {
         // Prefer submitted over unsubmitted, or higher score
         const existingSub = hasStudentSubmittedQuiz(existing);
-        const currentSub = hasStudentSubmittedQuiz(sub);
+        const currentSub = hasStudentSubmittedQuiz(normalizedSub);
         if (currentSub && !existingSub) {
-          mapByName.set(norm, sub);
-        } else if (currentSub && existingSub && sub.score > existing.score) {
-          mapByName.set(norm, sub);
+          mapByKey.set(key, normalizedSub);
+        } else if (currentSub && existingSub && normalizedSub.score > existing.score) {
+          mapByKey.set(key, normalizedSub);
         }
       }
     });
@@ -269,11 +277,14 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
       // If submissions was completely cleared, don't show the 5 default sample characters unless seeded
       if (submissions.length === 0 && defaultIds.has(reg.id)) return;
       const norm = normalizeStudentName(reg.name);
-      if (!norm || mapByName.has(norm)) return;
-      mapByName.set(norm, {
+      if (!norm) return;
+      const cls = normalizeStudentClass(reg.studentClass) || '7A';
+      const key = `${cls}__${norm}`;
+      if (mapByKey.has(key)) return;
+      mapByKey.set(key, {
         id: `reg-unsub-${reg.id}`,
         studentName: reg.name,
-        studentClass: normalizeStudentClass(reg.studentClass) || reg.studentClass,
+        studentClass: cls,
         studentNumber: (normalizeStudentNumber(reg.studentNumber) || '1').padStart(2, '0'),
         score: 0,
         totalQuestions: activeQuestions.length,
@@ -286,13 +297,25 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
       });
     });
 
-    return Array.from(mapByName.values());
+    return Array.from(mapByKey.values());
   }, [submissions, studentRestrictions.registeredStudents, activeQuestions.length]);
 
-  // Class list extraction
+  const classStudentCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    allStudentRecords.forEach(s => {
+      const cls = normalizeStudentClass(s.studentClass) || '7A';
+      counts[cls] = (counts[cls] || 0) + 1;
+    });
+    return counts;
+  }, [allStudentRecords]);
+
+  // Class list extraction (always includes 7A-7H so Class 7G is always accessible)
   const availableClasses = useMemo(() => {
-    const set = new Set<string>();
-    allStudentRecords.forEach(s => set.add(normalizeStudentClass(s.studentClass) || s.studentClass));
+    const set = new Set<string>(ALL_CLASS_LIST);
+    allStudentRecords.forEach(s => {
+      const cls = normalizeStudentClass(s.studentClass) || s.studentClass;
+      if (cls) set.add(cls);
+    });
     return ['ALL', ...Array.from(set).sort()];
   }, [allStudentRecords]);
 
@@ -1245,7 +1268,11 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                   className="py-1.5 px-2.5 rounded-lg border border-slate-300 bg-white font-semibold text-slate-800 focus:outline-hidden text-xs"
                 >
                   {availableClasses.map(c => (
-                    <option key={c} value={c}>{c === 'ALL' ? 'Semua Kelas' : `Kelas ${c}`}</option>
+                    <option key={c} value={c}>
+                      {c === 'ALL'
+                        ? `Semua Kelas (${allStudentRecords.length})`
+                        : `Kelas ${c}${classStudentCounts[c] ? ` (${classStudentCounts[c]} Siswa)` : ''}`}
+                    </option>
                   ))}
                 </select>
               </div>
@@ -1838,6 +1865,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
           onAddBatchSubmissions={onAddBatchSubmissions}
           onViewRecap={() => setActiveTab('recap')}
           existingClasses={availableClasses}
+          defaultClass={selectedClass !== 'ALL' ? selectedClass : '7G'}
         />
       )}
 

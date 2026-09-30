@@ -32,6 +32,7 @@ export function normalizeStudentName(name: string | undefined | null): string {
   return (name || '')
     .trim()
     .replace(/^\d{1,3}[\.\,\;\-\)\s\t]+/, '') // strip accidental leading roll number from bulk paste
+    .replace(/[\,\;\t\-]+\s*(?:KELAS\s*)?(?:VII|7)[\s\-_]*[A-H]\s*$/i, '') // strip trailing class token if pasted in name
     .trim()
     .toLowerCase()
     .replace(/\s+/g, ' ');
@@ -41,10 +42,168 @@ export function normalizeStudentClass(cls: string | undefined | null): string {
   const raw = (cls || '')
     .trim()
     .toUpperCase()
-    .replace(/^KELAS\s+/i, '')
-    .replace(/^VII([\s\-_]*)/i, '7')
-    .replace(/[\s\-_]+/g, '');
+    .replace(/^KELAS[\s\-_:\.]*/i, '')
+    .replace(/^VII([\s\-_\.]*)/i, '7')
+    .replace(/[\s\-_\.]+/g, '');
   return raw;
+}
+
+export interface ParsedStudentRow {
+  studentNumber: string;
+  studentName: string;
+  studentClass: string;
+  score: number | null;
+}
+
+/**
+ * Intelligently parses pasted text lines from Excel, Word, WhatsApp, or CSV.
+ * Recognizes class headers (e.g. "DAFTAR SISWA KELAS 7G"), class columns ("7G", "VII G"),
+ * roll numbers ("01", "1."), student names, and optional scores.
+ */
+export function parseSmartStudentLines(
+  rawText: string,
+  defaultClass: string = '7G'
+): ParsedStudentRow[] {
+  const lines = (rawText || '')
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  let activeClass = normalizeStudentClass(defaultClass) || '7G';
+  const results: ParsedStudentRow[] = [];
+
+  const isClassToken = (token: string): string | null => {
+    const cleaned = token
+      .trim()
+      .toUpperCase()
+      .replace(/^KELAS[\s\-_:\.]*/i, '')
+      .replace(/^VII[\s\-_\.]*/i, '7')
+      .replace(/[\s\-_\.]+/g, '');
+    if (/^7[A-H]$/.test(cleaned)) {
+      return cleaned;
+    }
+    return null;
+  };
+
+  lines.forEach((line) => {
+    // Check if the entire line is a class header like "KELAS 7G" or "DAFTAR NAMA SISWA KELAS VII G"
+    const headerClassMatch = line.match(
+      /^(?:DAFTAR\s+)?(?:NAMA\s+)?(?:SISWA\s+)?KELAS[\s:\-_]*((?:VII|7)[\s\-_]*[A-H])\b/i
+    );
+    if (headerClassMatch && line.split(/[,\t;]/).length === 1 && line.length < 40) {
+      const detected = isClassToken(headerClassMatch[1]);
+      if (detected) activeClass = detected;
+      return;
+    }
+
+    // Skip obvious table header lines like "No, Nama Siswa, Kelas, Nilai"
+    if (
+      /^(?:no\.?|nomor|absen|no\s*absen|urut)[\s,\t;]+(?:nama|nama\s*siswa|nama\s*lengkap|student)/i.test(
+        line
+      ) ||
+      /^(?:nama|nama\s*siswa|nama\s*lengkap)[\s,\t;]+(?:kelas|nilai|skor)/i.test(line)
+    ) {
+      return;
+    }
+
+    const parts = line
+      .split(/[\t,;]+/)
+      .map((p) => p.trim())
+      .filter(Boolean);
+    if (parts.length === 0) return;
+
+    let rowClass = activeClass;
+    let rollNum = '';
+    let nameStr = '';
+    let scoreVal: number | null = null;
+
+    if (parts.length === 1) {
+      // Single column: could be "01. Ahmad Fauzan - 7G" or "1. Ahmad Fauzan" or "Ahmad Fauzan"
+      let single = parts[0];
+      const leadingNum = single.match(/^(\d{1,3})[\.\)\-\s]+(.+)$/);
+      if (leadingNum) {
+        rollNum = leadingNum[1];
+        single = leadingNum[2].trim();
+      }
+      const trailingClass = single.match(/^(.+?)[\s\-\(\[]+(?:KELAS\s*)?((?:VII|7)[\s\-_]*[A-H])[\)\]]?$/i);
+      if (trailingClass) {
+        nameStr = trailingClass[1].trim();
+        const c = isClassToken(trailingClass[2]);
+        if (c) rowClass = c;
+      } else {
+        nameStr = single.trim();
+      }
+    } else {
+      // Multi-column (Tab, Comma, or Semicolon separated)
+      const remaining: string[] = [];
+      for (let i = 0; i < parts.length; i++) {
+        const p = parts[i];
+        const clsTok = isClassToken(p);
+        if (clsTok) {
+          rowClass = clsTok;
+          continue;
+        }
+        // First numeric token (<= 60) before name is roll number
+        if (
+          !rollNum &&
+          !nameStr &&
+          /^\d{1,3}\.?$/.test(p) &&
+          parseInt(p, 10) >= 1 &&
+          parseInt(p, 10) <= 65 &&
+          i === 0
+        ) {
+          rollNum = String(parseInt(p, 10));
+          continue;
+        }
+        // Trailing numeric token after name is score (0..100)
+        if (
+          nameStr &&
+          scoreVal === null &&
+          /^\d{1,3}$/.test(p) &&
+          parseInt(p, 10) >= 0 &&
+          parseInt(p, 10) <= 100 &&
+          i === parts.length - 1
+        ) {
+          scoreVal = parseInt(p, 10);
+          continue;
+        }
+        if (p === '-' || p.toLowerCase() === 'kosong' || p.toLowerCase() === 'belum') {
+          continue;
+        }
+        if (!nameStr) {
+          // Check if first remaining part has leading number like "01. Siti"
+          const m = p.match(/^(\d{1,3})[\.\)\-\s]+(.+)$/);
+          if (m && !rollNum) {
+            rollNum = String(parseInt(m[1], 10));
+            nameStr = m[2].trim();
+          } else {
+            nameStr = p;
+          }
+        } else {
+          remaining.push(p);
+        }
+      }
+      if (!nameStr && remaining.length > 0) {
+        nameStr = remaining.join(' ');
+      }
+    }
+
+    const cleanName = nameStr
+      .replace(/^\d{1,3}[\.\,\;\-\)\s\t]+/, '')
+      .replace(/[\,\;\t\-]+\s*(?:KELAS\s*)?(?:VII|7)[\s\-_]*[A-H]\s*$/i, '')
+      .trim();
+
+    if (!cleanName || /^\d+$/.test(cleanName)) return;
+
+    results.push({
+      studentNumber: (rollNum || String(results.length + 1)).padStart(2, '0'),
+      studentName: cleanName,
+      studentClass: rowClass,
+      score: scoreVal,
+    });
+  });
+
+  return results;
 }
 
 export function normalizeStudentNumber(num: string | undefined | null): string {

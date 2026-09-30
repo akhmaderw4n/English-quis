@@ -25,6 +25,8 @@ import {
   QUIZ_METADATA,
   hasStudentSubmittedQuiz,
   getSubmissionAssessmentStatus,
+  parseSmartStudentLines,
+  normalizeStudentClass,
 } from '../data/quizData';
 import { playClickSound, playCorrectSound } from '../utils/audio';
 
@@ -33,6 +35,7 @@ interface TeacherInputStudentProps {
   onAddBatchSubmissions: (submissions: QuizSubmission[]) => void;
   onViewRecap: () => void;
   existingClasses: string[];
+  defaultClass?: string;
 }
 
 export const TeacherInputStudent: React.FC<TeacherInputStudentProps> = ({
@@ -40,8 +43,10 @@ export const TeacherInputStudent: React.FC<TeacherInputStudentProps> = ({
   onAddBatchSubmissions,
   onViewRecap,
   existingClasses,
+  defaultClass = '7G',
 }) => {
-  const [entryMode, setEntryMode] = useState<'single' | 'batch' | 'paste'>('single');
+  const initialCls = normalizeStudentClass(defaultClass) || '7G';
+  const [entryMode, setEntryMode] = useState<'single' | 'batch' | 'paste'>('paste');
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   // Default class options
@@ -52,10 +57,10 @@ export const TeacherInputStudent: React.FC<TeacherInputStudentProps> = ({
   // MODE 1: SINGLE ENTRY STATE
   // ----------------------------------------------------
   const [singleName, setSingleName] = useState('');
-  const [singleClass, setSingleClass] = useState('7A');
+  const [singleClass, setSingleClass] = useState(initialCls);
   const [customClass, setCustomClass] = useState('');
   const [singleNumber, setSingleNumber] = useState('');
-  const [gradingMethod, setGradingMethod] = useState<'unsubmitted' | 'answers' | 'directScore'>('directScore');
+  const [gradingMethod, setGradingMethod] = useState<'unsubmitted' | 'answers' | 'directScore'>('unsubmitted');
   
   // Answers per question (1-10)
   const [studentAnswers, setStudentAnswers] = useState<Record<number, 'A' | 'B' | 'C' | 'D'>>(() => {
@@ -196,7 +201,7 @@ export const TeacherInputStudent: React.FC<TeacherInputStudentProps> = ({
     score: string; // Empty string '' means Belum Mengerjakan (do not force 0!)
   }
 
-  const [batchClass, setBatchClass] = useState('7B');
+  const [batchClass, setBatchClass] = useState(initialCls);
   const [batchRows, setBatchRows] = useState<BatchRow[]>([
     { id: '1', studentNumber: '01', studentName: '', score: '' },
     { id: '2', studentNumber: '02', studentName: '', score: '' },
@@ -251,8 +256,8 @@ export const TeacherInputStudent: React.FC<TeacherInputStudentProps> = ({
       return {
         id: `sub-batch-${Date.now()}-${idx}`,
         studentName: r.studentName.trim(),
-        studentClass: batchClass,
-        studentNumber: r.studentNumber.trim().padStart(2, '0'),
+        studentClass: normalizeStudentClass(batchClass) || '7G',
+        studentNumber: (r.studentNumber.trim() || String(idx + 1)).padStart(2, '0'),
         score,
         totalQuestions: QUIZ_QUESTIONS.length,
         correctCount,
@@ -266,7 +271,7 @@ export const TeacherInputStudent: React.FC<TeacherInputStudentProps> = ({
 
     onAddBatchSubmissions(newSubmissions);
     playCorrectSound();
-    setSuccessMessage(`Berhasil menyimpan ${newSubmissions.length} data siswa Kelas ${batchClass} ke dalam rekapitulasi nilai!`);
+    setSuccessMessage(`Berhasil menyimpan ${newSubmissions.length} data siswa Kelas ${batchClass} ke dalam Dashboard Siswa & Rekap Nilai Guru!`);
 
     // Reset batch rows
     setBatchRows([
@@ -279,107 +284,79 @@ export const TeacherInputStudent: React.FC<TeacherInputStudentProps> = ({
   // ----------------------------------------------------
   // MODE 3: PASTE EXCEL / TEXT DATA
   // ----------------------------------------------------
-  const [pasteClass, setPasteClass] = useState('7C');
-  const [pasteText, setPasteText] = useState(
-`01, Raditya Pratama, 90
-02, Tiara Andini, 80
-03, Kevin Sanjaya, 70
-04, Alisha Zahra
-05, Dimas Anggara`
-  );
+  const [pasteClass, setPasteClass] = useState(initialCls);
+  const [pasteText, setPasteText] = useState('');
   const [parsedPreview, setParsedPreview] = useState<QuizSubmission[]>([]);
+
+  // Sync default class when prop changes
+  React.useEffect(() => {
+    const clean = normalizeStudentClass(defaultClass);
+    if (clean && clean !== 'ALL') {
+      setSingleClass(clean);
+      setBatchClass(clean);
+      setPasteClass(clean);
+    }
+  }, [defaultClass]);
+
+  const buildSubmissionsFromPasteText = (rawText: string, targetClass: string): QuizSubmission[] => {
+    const rows = parseSmartStudentLines(rawText, targetClass);
+    return rows.map((row, idx) => {
+      const hasScore = row.score !== null && !Number.isNaN(row.score);
+      const score = hasScore ? Math.max(0, Math.min(100, row.score as number)) : 0;
+      const correctCount = hasScore ? Math.round(score / QUIZ_METADATA.pointsPerQuestion) : 0;
+      const wrongCount = hasScore ? QUIZ_QUESTIONS.length - correctCount : 0;
+
+      const answersMap: Record<number, 'A' | 'B' | 'C' | 'D'> = {};
+      if (hasScore) {
+        QUIZ_QUESTIONS.forEach((q, qIdx) => {
+          if (qIdx < correctCount) {
+            answersMap[q.id] = q.correctAnswer;
+          } else {
+            const wrongOption = q.options.find(o => o.key !== q.correctAnswer);
+            answersMap[q.id] = wrongOption ? wrongOption.key : 'A';
+          }
+        });
+      }
+
+      return {
+        id: `sub-paste-${Date.now()}-${idx}`,
+        studentName: row.studentName,
+        studentClass: normalizeStudentClass(row.studentClass || targetClass) || '7G',
+        studentNumber: (row.studentNumber || String(idx + 1)).padStart(2, '0'),
+        score,
+        totalQuestions: QUIZ_QUESTIONS.length,
+        correctCount,
+        wrongCount,
+        answers: answersMap,
+        timeSpentSeconds: hasScore ? 320 + idx * 30 : 0,
+        submittedAt: new Date().toISOString(),
+        hasSubmitted: hasScore,
+      };
+    });
+  };
 
   const handleParsePasteText = () => {
     playClickSound();
-    const lines = pasteText.split('\n').map(l => l.trim()).filter(Boolean);
-    const parsed: QuizSubmission[] = [];
-
-    lines.forEach((line, idx) => {
-      // Split by tab, comma, or semicolon
-      const parts = line.split(/[,\t;]+/).map(p => p.trim());
-      if (parts.length >= 1) {
-        let noAbsen = '';
-        let nama = '';
-        let nilaiStr = '';
-
-        if (parts.length >= 3) {
-          noAbsen = parts[0];
-          nama = parts[1];
-          nilaiStr = parts[2];
-        } else if (parts.length === 2) {
-          // Only 2 parts: check if part 0 is roll number and part 1 is name, OR part 0 is name and part 1 is score
-          if (!isNaN(Number(parts[0])) && isNaN(Number(parts[1]))) {
-            noAbsen = parts[0];
-            nama = parts[1];
-            nilaiStr = ''; // No score provided -> Belum Mengerjakan!
-          } else if (isNaN(Number(parts[0])) && !isNaN(Number(parts[1]))) {
-            noAbsen = String(idx + 1);
-            nama = parts[0];
-            nilaiStr = parts[1];
-          } else {
-            noAbsen = String(idx + 1);
-            nama = parts[0];
-            nilaiStr = '';
-          }
-        } else {
-          // Single part: check if it starts with "01. Nama Siswa"
-          const match = parts[0].match(/^(\d{1,3})[\.\-\)\s]+(.+)$/);
-          if (match) {
-            noAbsen = match[1];
-            nama = match[2].trim();
-          } else {
-            noAbsen = String(idx + 1);
-            nama = parts[0];
-          }
-          nilaiStr = '';
-        }
-
-        const cleanNilai = nilaiStr.replace('-', '').trim();
-        const hasScore = cleanNilai !== '' && !Number.isNaN(Number(cleanNilai)) && Number(cleanNilai) > 0;
-        const score = hasScore ? Math.max(0, Math.min(100, parseInt(cleanNilai, 10))) : 0;
-        const correctCount = hasScore ? Math.round(score / QUIZ_METADATA.pointsPerQuestion) : 0;
-        const wrongCount = hasScore ? QUIZ_QUESTIONS.length - correctCount : 0;
-
-        const answersMap: Record<number, 'A' | 'B' | 'C' | 'D'> = {};
-        if (hasScore) {
-          QUIZ_QUESTIONS.forEach((q, qIdx) => {
-            if (qIdx < correctCount) {
-              answersMap[q.id] = q.correctAnswer;
-            } else {
-              const wrongOption = q.options.find(o => o.key !== q.correctAnswer);
-              answersMap[q.id] = wrongOption ? wrongOption.key : 'A';
-            }
-          });
-        }
-
-        parsed.push({
-          id: `sub-paste-${Date.now()}-${idx}`,
-          studentName: nama || `Siswa ${idx + 1}`,
-          studentClass: pasteClass,
-          studentNumber: (noAbsen || String(idx + 1)).padStart(2, '0'),
-          score,
-          totalQuestions: QUIZ_QUESTIONS.length,
-          correctCount,
-          wrongCount,
-          answers: answersMap,
-          timeSpentSeconds: hasScore ? 320 + idx * 30 : 0,
-          submittedAt: new Date().toISOString(),
-          hasSubmitted: hasScore,
-        });
-      }
-    });
-
+    const parsed = buildSubmissionsFromPasteText(pasteText, pasteClass);
     setParsedPreview(parsed);
   };
 
   const handleSaveParsedData = () => {
-    if (parsedPreview.length === 0) {
-      alert('Tidak ada data pratinjau yang valid untuk disimpan.');
+    const listToSave =
+      parsedPreview.length > 0
+        ? parsedPreview
+        : buildSubmissionsFromPasteText(pasteText, pasteClass);
+
+    if (listToSave.length === 0) {
+      alert('Mohon ketik atau tempelkan minimal 1 baris nama siswa terlebih dahulu.');
       return;
     }
-    onAddBatchSubmissions(parsedPreview);
+    onAddBatchSubmissions(listToSave);
     playCorrectSound();
-    setSuccessMessage(`Berhasil mengimpor ${parsedPreview.length} data siswa Kelas ${pasteClass} ke rekap nilai!`);
+    const classesSaved = Array.from(new Set(listToSave.map(s => s.studentClass))).join(', ');
+    setSuccessMessage(
+      `Berhasil menyimpan ${listToSave.length} data siswa Kelas ${classesSaved} ke Dashboard Siswa & Rekap Nilai Guru!`
+    );
     setParsedPreview([]);
     setPasteText('');
   };
@@ -1005,7 +982,17 @@ export const TeacherInputStudent: React.FC<TeacherInputStudentProps> = ({
               </label>
               <select
                 value={pasteClass}
-                onChange={(e) => setPasteClass(e.target.value)}
+                onChange={(e) => {
+                  const nextCls = normalizeStudentClass(e.target.value) || '7G';
+                  setPasteClass(nextCls);
+                  setSingleClass(nextCls);
+                  setBatchClass(nextCls);
+                  if (parsedPreview.length > 0) {
+                    setParsedPreview(prev =>
+                      prev.map(item => ({ ...item, studentClass: nextCls }))
+                    );
+                  }
+                }}
                 className="w-full px-3 py-2 rounded-xl border border-slate-300 text-sm font-bold bg-white"
               >
                 {allClasses.map(cls => (
@@ -1016,38 +1003,43 @@ export const TeacherInputStudent: React.FC<TeacherInputStudentProps> = ({
 
             <div className="sm:col-span-3">
               <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1.5">
-                Data Teks (Tempelkan di sini):
+                Data Teks Daftar Siswa Kelas {pasteClass} (Tempelkan di sini):
               </label>
               <textarea
                 rows={6}
                 value={pasteText}
-                onChange={(e) => setPasteText(e.target.value)}
-                placeholder="01, Siti Aisyah, 90&#10;02, Budi Utomo"
+                onChange={(e) => {
+                  setPasteText(e.target.value);
+                  if (parsedPreview.length > 0) {
+                    setParsedPreview([]);
+                  }
+                }}
+                placeholder={`Contoh format daftar siswa Kelas ${pasteClass} (tanpa nilai / belum mengerjakan):\n01. Ahmad Fauzan\n02. Siti Aisyah\n03. Budi Utomo\n\nAtau dengan nilai: 01, Ahmad Fauzan, 90`}
                 className="w-full p-3 rounded-xl border border-slate-300 text-xs font-mono focus:border-emerald-500 focus:ring-1 focus:ring-emerald-200 outline-hidden bg-white"
               />
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={handleSaveParsedData}
+              className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs sm:text-sm flex items-center gap-2 transition-colors cursor-pointer shadow-xs"
+            >
+              <Save className="w-4 h-4" />
+              <span>
+                Simpan Data Siswa ke Kelas {pasteClass} ({parsedPreview.length > 0 ? parsedPreview.length : pasteText.split('\n').filter(Boolean).length} Baris)
+              </span>
+            </button>
+
             <button
               type="button"
               onClick={handleParsePasteText}
-              className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+              className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
             >
               <Sparkles className="w-4 h-4 text-amber-400" />
-              <span>1. Pratinjau Data ({pasteText.split('\n').filter(Boolean).length} Baris)</span>
+              <span>Pratinjau Tabel ({pasteText.split('\n').filter(Boolean).length} Baris)</span>
             </button>
-
-            {parsedPreview.length > 0 && (
-              <button
-                type="button"
-                onClick={handleSaveParsedData}
-                className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs"
-              >
-                <Save className="w-4 h-4" />
-                <span>2. Simpan {parsedPreview.length} Siswa ke Rekap</span>
-              </button>
-            )}
           </div>
 
           {/* Parsed Preview Table */}

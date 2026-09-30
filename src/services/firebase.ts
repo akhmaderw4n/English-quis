@@ -1,33 +1,36 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
-import { 
-  initializeFirestore, 
+import {
+  initializeFirestore,
   setLogLevel,
-  collection, 
-  doc, 
-  setDoc, 
-  getDoc, 
-  getDocs, 
-  deleteDoc, 
-  writeBatch, 
-  onSnapshot, 
-  query, 
-  DocumentData
+  collection,
+  doc,
+  setDoc,
+  getDocs,
+  deleteDoc,
+  writeBatch,
+  onSnapshot,
+  query,
+  DocumentData,
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
-import { QuizSubmission, QuizViolationRecord, Question, ProcedureTextConfig, StudentRestrictionConfig, DashboardBackgroundConfig } from '../types';
+import {
+  QuizSubmission,
+  QuizViolationRecord,
+  Question,
+  ProcedureTextConfig,
+  StudentRestrictionConfig,
+  DashboardBackgroundConfig,
+} from '../types';
 
-// Silence internal Firestore 10s offline-fallback console.error noise on high-latency school networks
 try {
   setLogLevel('silent');
 } catch {
-  // Ignore if setLogLevel is unavailable in environment
+  // Ignore if unavailable
 }
 
-// Initialize Firebase App & Services
 const app = initializeApp(firebaseConfig);
 
-// Use auto-detect long polling so standard fast WebChannel is used by default and long-polling only activates if a firewall blocks streams
 export const db = initializeFirestore(
   app,
   {
@@ -63,8 +66,31 @@ export interface FirestoreErrorInfo {
   };
 }
 
-export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null): never {
+let isFirestoreQuotaExhausted = false;
+
+function isQuotaOrNetworkError(error: unknown): boolean {
+  const msg = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  const code = String((error as any)?.code || '').toLowerCase();
+  return (
+    code.includes('resource-exhausted') ||
+    code.includes('unavailable') ||
+    msg.includes('quota') ||
+    msg.includes('resource-exhausted') ||
+    msg.includes('offline') ||
+    msg.includes('failed-precondition')
+  );
+}
+
+export function handleFirestoreError(
+  error: unknown,
+  operationType: OperationType,
+  path: string | null
+): void {
   const errMsg = error instanceof Error ? error.message : String(error);
+  if (isQuotaOrNetworkError(error)) {
+    isFirestoreQuotaExhausted = true;
+    return;
+  }
   const errInfo: FirestoreErrorInfo = {
     error: errMsg,
     authInfo: {
@@ -73,20 +99,20 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
       emailVerified: auth.currentUser?.emailVerified,
       isAnonymous: auth.currentUser?.isAnonymous,
       tenantId: auth.currentUser?.tenantId,
-      providerInfo: auth.currentUser?.providerData?.map(provider => ({
-        providerId: provider.providerId,
-        email: provider.email,
-      })) || []
+      providerInfo:
+        auth.currentUser?.providerData?.map((provider) => ({
+          providerId: provider.providerId,
+          email: provider.email,
+        })) || [],
     },
     operationType,
-    path
+    path,
   };
   if (errMsg.toLowerCase().includes('permission') || errMsg.toLowerCase().includes('insufficient')) {
     console.error('Firestore Error: ', JSON.stringify(errInfo));
   } else {
     console.warn('Firestore operation notice:', errMsg);
   }
-  throw new Error(JSON.stringify(errInfo));
 }
 
 const SUBMISSIONS_COLLECTION = 'submissions';
@@ -94,272 +120,570 @@ const DELETED_COLLECTION = 'deletedSubmissions';
 const SETTINGS_COLLECTION = 'settings';
 const VIOLATIONS_COLLECTION = 'violations';
 
-// Shared multiplexer for `/settings` collection so all 5 settings docs share 1 Firestore stream instead of 5 separate listeners
+const QUESTION_BANK_DOC = 'questionBank';
+const PROCEDURE_TEXT_DOC = 'procedureText';
+const STUDENT_RESTRICTIONS_DOC = 'studentRestrictions';
+const DASHBOARD_BACKGROUND_DOC = 'dashboardBackground';
+
+const LS_SUBMISSIONS = 'en_nusantara_quiz_submissions_v1';
+const LS_RESTRICTIONS = 'en_nusantara_student_restrictions_v1';
+const LS_PIN = 'en_nusantara_teacher_pin_v1';
+const LS_QUESTIONS = 'en_nusantara_quiz_questions_v1';
+const LS_PROCEDURE = 'en_nusantara_learning_material_v2';
+const LS_BG = 'en_nusantara_dashboard_bg_v1';
+
 type SettingsCacheMap = Record<string, DocumentData>;
+
+const submissionsMap = new Map<string, QuizSubmission>();
+const deletedIdsSet = new Set<string>();
 let latestSettingsMap: SettingsCacheMap = {};
-let hasSettingsSnapshotLoaded = false;
+const violationsMap = new Map<string, QuizViolationRecord>();
+
+const submissionListeners = new Set<(subs: QuizSubmission[]) => void>();
 const settingsSubscribers = new Set<(map: SettingsCacheMap) => void>();
-let sharedSettingsUnsubscribe: (() => void) | null = null;
+const violationListeners = new Set<(viols: QuizViolationRecord[]) => void>();
 
-function subscribeToSharedSettings(listener: (map: SettingsCacheMap) => void): () => void {
-  settingsSubscribers.add(listener);
-  if (hasSettingsSnapshotLoaded) {
-    listener(latestSettingsMap);
+let hasInitializedLocal = false;
+let hasInitialMergeSent = false;
+let pollIntervalId: ReturnType<typeof setInterval> | null = null;
+
+function normalizeNameKey(name: string): string {
+  return String(name || '')
+    .trim()
+    .replace(/^\d{1,3}[\.\,\;\-\)\s\t]+/, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+function normalizeClassKey(cls: string): string {
+  const raw = String(cls || '')
+    .trim()
+    .toUpperCase()
+    .replace(/^KELAS[\s\-_:\.]*/i, '');
+  const compact = raw.replace(/[\s\-_\.]/g, '');
+  const match7 = compact.match(/^7([A-H])$/);
+  if (match7) return `7${match7[1]}`;
+  const matchRoman = compact.match(/^VII([A-H])$/);
+  if (matchRoman) return `7${matchRoman[1]}`;
+  return compact || '7A';
+}
+
+function mergeRestrictionConfigs(
+  currentRaw: string | undefined,
+  incomingRaw: string | undefined
+): string | undefined {
+  if (!incomingRaw) return currentRaw;
+  if (!currentRaw) return incomingRaw;
+  try {
+    const currentObj = JSON.parse(currentRaw);
+    const incomingObj = JSON.parse(incomingRaw);
+    if (!currentObj || typeof currentObj !== 'object') return incomingRaw;
+    if (!incomingObj || typeof incomingObj !== 'object') return currentRaw;
+
+    const currentTime = currentObj.updatedAt ? new Date(currentObj.updatedAt).getTime() : 0;
+    const incomingTime = incomingObj.updatedAt ? new Date(incomingObj.updatedAt).getTime() : 0;
+
+    // Union registeredStudents so neither local nor server/cloud loses inputted class rosters (e.g., 7G)
+    const rosterMap = new Map<string, any>();
+    const olderRoster = incomingTime >= currentTime ? currentObj.registeredStudents : incomingObj.registeredStudents;
+    const newerRoster = incomingTime >= currentTime ? incomingObj.registeredStudents : currentObj.registeredStudents;
+
+    if (Array.isArray(olderRoster)) {
+      olderRoster.forEach((r: any) => {
+        if (!r || !r.name) return;
+        const k = `${normalizeClassKey(r.studentClass)}__${normalizeNameKey(r.name)}`;
+        rosterMap.set(k, { ...r, studentClass: normalizeClassKey(r.studentClass) });
+      });
+    }
+    if (Array.isArray(newerRoster)) {
+      newerRoster.forEach((r: any) => {
+        if (!r || !r.name) return;
+        const k = `${normalizeClassKey(r.studentClass)}__${normalizeNameKey(r.name)}`;
+        rosterMap.set(k, { ...r, studentClass: normalizeClassKey(r.studentClass) });
+      });
+    }
+
+    const base = incomingTime >= currentTime ? { ...currentObj, ...incomingObj } : { ...incomingObj, ...currentObj };
+    base.registeredStudents = Array.from(rosterMap.values());
+    return JSON.stringify(base);
+  } catch {
+    return incomingRaw || currentRaw;
   }
+}
 
-  if (!sharedSettingsUnsubscribe) {
-    sharedSettingsUnsubscribe = onSnapshot(
-      collection(db, SETTINGS_COLLECTION),
-      (snapshot) => {
-        const nextMap: SettingsCacheMap = {};
-        snapshot.forEach((docSnap) => {
-          nextMap[docSnap.id] = docSnap.data();
-        });
-        latestSettingsMap = nextMap;
-        hasSettingsSnapshotLoaded = true;
-        settingsSubscribers.forEach((cb) => {
-          try {
-            cb(latestSettingsMap);
-          } catch (e) {
-            console.warn('Settings subscriber callback warning:', e);
+function hydrateFromLocalStorageOnce() {
+  if (hasInitializedLocal || typeof window === 'undefined') return;
+  hasInitializedLocal = true;
+
+  try {
+    const rawSubs = localStorage.getItem(LS_SUBMISSIONS);
+    if (rawSubs) {
+      const parsed: QuizSubmission[] = JSON.parse(rawSubs);
+      if (Array.isArray(parsed)) {
+        parsed.forEach((s) => {
+          if (s && s.id && !deletedIdsSet.has(s.id)) {
+            submissionsMap.set(s.id, {
+              ...s,
+              studentClass: normalizeClassKey(s.studentClass),
+            });
           }
         });
-      },
-      (err) => {
-        console.warn('Shared settings snapshot notice (operating with local cache):', err?.message || err);
       }
-    );
+    }
+  } catch {}
+
+  try {
+    const rawRestr = localStorage.getItem(LS_RESTRICTIONS);
+    if (rawRestr) {
+      latestSettingsMap[STUDENT_RESTRICTIONS_DOC] = {
+        restrictionsJson: rawRestr,
+        updatedAt: new Date().toISOString(),
+      };
+    }
+  } catch {}
+
+  try {
+    const rawPin = localStorage.getItem(LS_PIN);
+    if (rawPin) {
+      latestSettingsMap['app'] = { teacherPin: rawPin };
+    }
+  } catch {}
+
+  try {
+    const rawQuestions = localStorage.getItem(LS_QUESTIONS);
+    if (rawQuestions) {
+      latestSettingsMap[QUESTION_BANK_DOC] = { questionsJson: rawQuestions };
+    }
+  } catch {}
+
+  try {
+    const rawProc = localStorage.getItem(LS_PROCEDURE);
+    if (rawProc) {
+      latestSettingsMap[PROCEDURE_TEXT_DOC] = { procedureTextJson: rawProc };
+    }
+  } catch {}
+
+  try {
+    const rawBg = localStorage.getItem(LS_BG);
+    if (rawBg) {
+      latestSettingsMap[DASHBOARD_BACKGROUND_DOC] = { backgroundJson: rawBg };
+    }
+  } catch {}
+}
+
+function emitSubmissions() {
+  const active = Array.from(submissionsMap.values()).filter((s) => !deletedIdsSet.has(s.id));
+  active.sort(
+    (a, b) => new Date(b.submittedAt || 0).getTime() - new Date(a.submittedAt || 0).getTime()
+  );
+  submissionListeners.forEach((cb) => {
+    try {
+      cb(active);
+    } catch {}
+  });
+}
+
+function emitSettings() {
+  settingsSubscribers.forEach((cb) => {
+    try {
+      cb(latestSettingsMap);
+    } catch {}
+  });
+}
+
+function emitViolations() {
+  const list = Array.from(violationsMap.values());
+  list.sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime());
+  violationListeners.forEach((cb) => {
+    try {
+      cb(list);
+    } catch {}
+  });
+}
+
+async function syncWithBackendServer() {
+  if (typeof window === 'undefined') return;
+  hydrateFromLocalStorageOnce();
+
+  if (!hasInitialMergeSent) {
+    hasInitialMergeSent = true;
+    try {
+      const localSubs = Array.from(submissionsMap.values());
+      let localRestrictionsObj: any = undefined;
+      const rawRestr = latestSettingsMap[STUDENT_RESTRICTIONS_DOC]?.restrictionsJson;
+      if (rawRestr) {
+        try {
+          localRestrictionsObj = JSON.parse(rawRestr);
+        } catch {}
+      }
+      await fetch('/api/sync/merge-client', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          submissions: localSubs,
+          studentRestrictions: localRestrictionsObj,
+          settings: latestSettingsMap,
+        }),
+      });
+    } catch {}
+  }
+
+  try {
+    const res = await fetch('/api/sync');
+    if (!res.ok) return;
+    const data = await res.json();
+
+    if (Array.isArray(data.deletedSubmissionIds)) {
+      data.deletedSubmissionIds.forEach((id: string) => {
+        deletedIdsSet.add(id);
+        submissionsMap.delete(id);
+      });
+    }
+
+    if (Array.isArray(data.submissions)) {
+      data.submissions.forEach((sub: QuizSubmission) => {
+        if (sub && sub.id && !deletedIdsSet.has(sub.id)) {
+          submissionsMap.set(sub.id, {
+            ...sub,
+            studentClass: normalizeClassKey(sub.studentClass),
+          });
+        }
+      });
+    }
+    emitSubmissions();
+
+    if (data.settings && typeof data.settings === 'object') {
+      const nextSettings: SettingsCacheMap = { ...latestSettingsMap };
+      Object.entries(data.settings).forEach(([docId, docData]: [string, any]) => {
+        if (!docData) return;
+        if (docId === STUDENT_RESTRICTIONS_DOC && docData.restrictionsJson) {
+          const mergedJson = mergeRestrictionConfigs(
+            nextSettings[STUDENT_RESTRICTIONS_DOC]?.restrictionsJson,
+            docData.restrictionsJson
+          );
+          nextSettings[STUDENT_RESTRICTIONS_DOC] = {
+            ...docData,
+            restrictionsJson: mergedJson,
+          };
+        } else {
+          nextSettings[docId] = docData;
+        }
+      });
+      latestSettingsMap = nextSettings;
+      emitSettings();
+    }
+
+    if (Array.isArray(data.violations)) {
+      violationsMap.clear();
+      data.violations.forEach((v: QuizViolationRecord) => {
+        if (v && v.id) {
+          violationsMap.set(v.id, v);
+        }
+      });
+      emitViolations();
+    }
+  } catch {
+    // Operate from local cache if server fetch fails temporarily
+  }
+}
+
+function ensureBackendPolling() {
+  if (typeof window === 'undefined' || pollIntervalId) return;
+  hydrateFromLocalStorageOnce();
+  syncWithBackendServer();
+  pollIntervalId = setInterval(() => {
+    syncWithBackendServer();
+  }, 2500);
+  window.addEventListener('focus', () => {
+    syncWithBackendServer();
+  });
+}
+
+function subscribeToSharedSettings(listener: (map: SettingsCacheMap) => void): () => void {
+  hydrateFromLocalStorageOnce();
+  ensureBackendPolling();
+  settingsSubscribers.add(listener);
+  listener(latestSettingsMap);
+
+  let firestoreUnsub: (() => void) | null = null;
+  if (!isFirestoreQuotaExhausted) {
+    try {
+      firestoreUnsub = onSnapshot(
+        collection(db, SETTINGS_COLLECTION),
+        (snapshot) => {
+          const nextMap: SettingsCacheMap = { ...latestSettingsMap };
+          snapshot.forEach((docSnap) => {
+            const cloudData = docSnap.data();
+            if (docSnap.id === STUDENT_RESTRICTIONS_DOC && cloudData?.restrictionsJson) {
+              nextMap[STUDENT_RESTRICTIONS_DOC] = {
+                ...cloudData,
+                restrictionsJson: mergeRestrictionConfigs(
+                  nextMap[STUDENT_RESTRICTIONS_DOC]?.restrictionsJson,
+                  cloudData.restrictionsJson
+                ),
+              };
+            } else {
+              nextMap[docSnap.id] = cloudData;
+            }
+          });
+          latestSettingsMap = nextMap;
+          emitSettings();
+        },
+        (err) => {
+          if (isQuotaOrNetworkError(err)) {
+            isFirestoreQuotaExhausted = true;
+          }
+        }
+      );
+    } catch {}
   }
 
   return () => {
     settingsSubscribers.delete(listener);
-    if (settingsSubscribers.size === 0 && sharedSettingsUnsubscribe) {
-      sharedSettingsUnsubscribe();
-      sharedSettingsUnsubscribe = null;
-      hasSettingsSnapshotLoaded = false;
+    if (firestoreUnsub) {
+      try {
+        firestoreUnsub();
+      } catch {}
     }
   };
 }
 
-/**
- * Validate connection to Firestore on initial boot without opening redundant competing RPC streams.
- */
 export async function testConnection(): Promise<boolean> {
   if (typeof navigator !== 'undefined' && navigator.onLine === false) {
     return false;
   }
-  if (hasSettingsSnapshotLoaded) {
-    return true;
-  }
-  return new Promise<boolean>((resolve) => {
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (!settled) {
-        settled = true;
-        unsub();
-        // Resolve true if browser is online (Firestore offline persistence handles syncing seamlessly)
-        resolve(typeof navigator !== 'undefined' ? navigator.onLine !== false : true);
-      }
-    }, 4000);
-
-    const unsub = subscribeToSharedSettings(() => {
-      if (!settled) {
-        settled = true;
-        clearTimeout(timer);
-        unsub();
-        resolve(true);
-      }
-    });
-  });
+  try {
+    const res = await fetch('/api/sync');
+    if (res.ok) return true;
+  } catch {}
+  return true;
 }
 
-/**
- * Real-time subscription to submissions across all devices with tombstone filtering.
- */
 export function subscribeToSubmissions(
   onData: (submissions: QuizSubmission[]) => void,
-  onError?: (error: Error) => void
+  _onError?: (error: Error) => void
 ): () => void {
-  let deletedIds = new Set<string>();
-  let currentSubmissions: QuizSubmission[] = [];
+  hydrateFromLocalStorageOnce();
+  ensureBackendPolling();
+  submissionListeners.add(onData);
+  emitSubmissions();
 
-  const emitFiltered = () => {
-    const activeSubmissions = currentSubmissions.filter((s) => !deletedIds.has(s.id));
-    onData(activeSubmissions);
-  };
+  let unsubDeleted: (() => void) | null = null;
+  let unsubSubmissions: (() => void) | null = null;
 
-  // Subscribe to deleted tombstones to ensure deleted submissions never appear
-  const unsubDeleted = onSnapshot(
-    collection(db, DELETED_COLLECTION),
-    (snapshot) => {
-      const ids = new Set<string>();
-      snapshot.forEach((docSnap) => {
-        ids.add(docSnap.id);
-      });
-      deletedIds = ids;
-      emitFiltered();
-    },
-    (err) => {
-      console.warn('Deleted tombstones snapshot warning:', err);
-    }
-  );
-
-  const q = query(collection(db, SUBMISSIONS_COLLECTION));
-
-  const unsubSubmissions = onSnapshot(
-    q,
-    (snapshot) => {
-      const items: QuizSubmission[] = [];
-      snapshot.forEach((docSnap) => {
-        const data = docSnap.data();
-        const id = data.id || docSnap.id;
-        if (!deletedIds.has(id)) {
-          items.push({
-            id,
-            studentName: data.studentName || '',
-            studentClass: data.studentClass || '',
-            studentNumber: data.studentNumber || '',
-            score: typeof data.score === 'number' ? data.score : 0,
-            totalQuestions: typeof data.totalQuestions === 'number' ? data.totalQuestions : 10,
-            correctCount: typeof data.correctCount === 'number' ? data.correctCount : 0,
-            wrongCount: typeof data.wrongCount === 'number' ? data.wrongCount : 0,
-            answers: data.answers || {},
-            timeSpentSeconds: typeof data.timeSpentSeconds === 'number' ? data.timeSpentSeconds : 0,
-            submittedAt: data.submittedAt || new Date().toISOString(),
-            violationsCount: typeof data.violationsCount === 'number' ? data.violationsCount : 0,
-            ...(typeof data.hasSubmitted === 'boolean' ? { hasSubmitted: data.hasSubmitted } : {}),
+  if (!isFirestoreQuotaExhausted) {
+    try {
+      unsubDeleted = onSnapshot(
+        collection(db, DELETED_COLLECTION),
+        (snapshot) => {
+          snapshot.forEach((docSnap) => {
+            deletedIdsSet.add(docSnap.id);
+            submissionsMap.delete(docSnap.id);
           });
+          emitSubmissions();
+        },
+        (err) => {
+          if (isQuotaOrNetworkError(err)) {
+            isFirestoreQuotaExhausted = true;
+          }
         }
-      });
+      );
 
-      // Sort newest first by submission timestamp
-      items.sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
-      currentSubmissions = items;
-      emitFiltered();
-    },
-    (err) => {
-      console.warn('Snapshot subscription notice for submissions (will reconnect automatically):', err?.message || err);
-      if (onError) onError(err);
-    }
-  );
+      unsubSubmissions = onSnapshot(
+        query(collection(db, SUBMISSIONS_COLLECTION)),
+        (snapshot) => {
+          snapshot.forEach((docSnap) => {
+            const data = docSnap.data();
+            const id = data.id || docSnap.id;
+            if (!deletedIdsSet.has(id)) {
+              submissionsMap.set(id, {
+                id,
+                studentName: data.studentName || '',
+                studentClass: normalizeClassKey(data.studentClass || '7A'),
+                studentNumber: data.studentNumber || '',
+                score: typeof data.score === 'number' ? data.score : 0,
+                totalQuestions: typeof data.totalQuestions === 'number' ? data.totalQuestions : 10,
+                correctCount: typeof data.correctCount === 'number' ? data.correctCount : 0,
+                wrongCount: typeof data.wrongCount === 'number' ? data.wrongCount : 0,
+                answers: data.answers || {},
+                timeSpentSeconds: typeof data.timeSpentSeconds === 'number' ? data.timeSpentSeconds : 0,
+                submittedAt: data.submittedAt || new Date().toISOString(),
+                violationsCount: typeof data.violationsCount === 'number' ? data.violationsCount : 0,
+                ...(typeof data.hasSubmitted === 'boolean' ? { hasSubmitted: data.hasSubmitted } : {}),
+              });
+            }
+          });
+          emitSubmissions();
+        },
+        (err) => {
+          if (isQuotaOrNetworkError(err)) {
+            isFirestoreQuotaExhausted = true;
+          }
+        }
+      );
+    } catch {}
+  }
 
   return () => {
-    unsubDeleted();
-    unsubSubmissions();
+    submissionListeners.delete(onData);
+    if (unsubDeleted) {
+      try {
+        unsubDeleted();
+      } catch {}
+    }
+    if (unsubSubmissions) {
+      try {
+        unsubSubmissions();
+      } catch {}
+    }
   };
 }
 
-/**
- * Save a single submission to Firestore so it syncs immediately across all devices.
- */
+function sanitizeSubmissionPayload(submission: QuizSubmission, fallbackIdx: number = 0): QuizSubmission {
+  const safeId = String(submission.id || `sub-${Date.now()}-${fallbackIdx}`)
+    .replace(/[^a-zA-Z0-9_\-]/g, '-')
+    .slice(0, 120);
+  return {
+    id: safeId,
+    studentName: (submission.studentName || 'Siswa').trim().slice(0, 115) || 'Siswa',
+    studentClass: normalizeClassKey(submission.studentClass || '7A').slice(0, 25) || '7A',
+    studentNumber: (submission.studentNumber || '1').trim().slice(0, 14) || '1',
+    score: Math.min(100, Math.max(0, Number(submission.score) || 0)),
+    totalQuestions: Math.min(100, Math.max(0, Number(submission.totalQuestions) || 10)),
+    correctCount: Math.min(100, Math.max(0, Number(submission.correctCount) || 0)),
+    wrongCount: Math.min(100, Math.max(0, Number(submission.wrongCount) || 0)),
+    answers: submission.answers || {},
+    timeSpentSeconds: Math.max(0, Math.round(Number(submission.timeSpentSeconds) || 0)),
+    submittedAt: (submission.submittedAt || new Date().toISOString()).slice(0, 45),
+    violationsCount: Math.max(0, Number(submission.violationsCount) || 0),
+    ...(typeof submission.hasSubmitted === 'boolean' ? { hasSubmitted: submission.hasSubmitted } : {}),
+  };
+}
+
 export async function saveSubmissionToFirebase(submission: QuizSubmission): Promise<void> {
-  const safeId = String(submission.id || `sub-${Date.now()}`).replace(/[^a-zA-Z0-9_\-]/g, '-').slice(0, 120);
-  const docRef = doc(db, SUBMISSIONS_COLLECTION, safeId);
-  const delRef = doc(db, DELETED_COLLECTION, safeId);
-  try {
-    const batch = writeBatch(db);
-    batch.set(docRef, {
-      id: safeId,
-      studentName: (submission.studentName || 'Siswa').trim().slice(0, 115) || 'Siswa',
-      studentClass: (submission.studentClass || '7A').trim().slice(0, 25) || '7A',
-      studentNumber: (submission.studentNumber || '1').trim().slice(0, 14) || '1',
-      score: Math.min(100, Math.max(0, Number(submission.score) || 0)),
-      totalQuestions: Math.min(100, Math.max(0, Number(submission.totalQuestions) || 10)),
-      correctCount: Math.min(100, Math.max(0, Number(submission.correctCount) || 0)),
-      wrongCount: Math.min(100, Math.max(0, Number(submission.wrongCount) || 0)),
-      answers: submission.answers || {},
-      timeSpentSeconds: Math.max(0, Math.round(Number(submission.timeSpentSeconds) || 0)),
-      submittedAt: (submission.submittedAt || new Date().toISOString()).slice(0, 45),
-      violationsCount: Math.max(0, Number(submission.violationsCount) || 0),
-      ...(typeof submission.hasSubmitted === 'boolean' ? { hasSubmitted: submission.hasSubmitted } : {}),
-    });
-    // Remove from tombstone if re-created
-    batch.delete(delRef);
-    await batch.commit();
-  } catch (error) {
-    handleFirestoreError(error, OperationType.CREATE, `${SUBMISSIONS_COLLECTION}/${safeId}`);
-  }
-}
+  const clean = sanitizeSubmissionPayload(submission);
+  deletedIdsSet.delete(clean.id);
+  submissionsMap.set(clean.id, clean);
+  emitSubmissions();
 
-/**
- * Batch save multiple submissions (e.g. from sample data or excel import).
- */
-export async function saveBatchSubmissionsToFirebase(submissions: QuizSubmission[]): Promise<void> {
   try {
-    const batch = writeBatch(db);
-    submissions.forEach((sub, idx) => {
-      const safeId = String(sub.id || `sub-batch-${Date.now()}-${idx}`).replace(/[^a-zA-Z0-9_\-]/g, '-').slice(0, 120);
-      const docRef = doc(db, SUBMISSIONS_COLLECTION, safeId);
-      const delRef = doc(db, DELETED_COLLECTION, safeId);
-      batch.set(docRef, {
-        id: safeId,
-        studentName: (sub.studentName || 'Siswa').trim().slice(0, 115) || 'Siswa',
-        studentClass: (sub.studentClass || '7A').trim().slice(0, 25) || '7A',
-        studentNumber: (sub.studentNumber || '1').trim().slice(0, 14) || '1',
-        score: Math.min(100, Math.max(0, Number(sub.score) || 0)),
-        totalQuestions: Math.min(100, Math.max(0, Number(sub.totalQuestions) || 10)),
-        correctCount: Math.min(100, Math.max(0, Number(sub.correctCount) || 0)),
-        wrongCount: Math.min(100, Math.max(0, Number(sub.wrongCount) || 0)),
-        answers: sub.answers || {},
-        timeSpentSeconds: Math.max(0, Math.round(Number(sub.timeSpentSeconds) || 0)),
-        submittedAt: (sub.submittedAt || new Date().toISOString()).slice(0, 45),
-        violationsCount: Math.max(0, Number(sub.violationsCount) || 0),
-        ...(typeof sub.hasSubmitted === 'boolean' ? { hasSubmitted: sub.hasSubmitted } : {}),
-      });
-      // Clear tombstone
+    await fetch('/api/sync/submissions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ submissions: [clean] }),
+    });
+  } catch {}
+
+  if (!isFirestoreQuotaExhausted) {
+    const docRef = doc(db, SUBMISSIONS_COLLECTION, clean.id);
+    const delRef = doc(db, DELETED_COLLECTION, clean.id);
+    try {
+      const batch = writeBatch(db);
+      batch.set(docRef, clean);
       batch.delete(delRef);
-    });
-    await batch.commit();
-  } catch (error) {
-    handleFirestoreError(error, OperationType.WRITE, SUBMISSIONS_COLLECTION);
+      await batch.commit();
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, `${SUBMISSIONS_COLLECTION}/${clean.id}`);
+    }
   }
 }
 
-/**
- * Delete a submission from Firestore PERMANENTLY.
- * Both deletes the document from submissions AND writes a tombstone in deletedSubmissions
- * to guarantee it cannot be restored by stale caches on other devices.
- */
+export async function saveBatchSubmissionsToFirebase(submissions: QuizSubmission[]): Promise<void> {
+  const cleanedList = submissions.map((sub, idx) => sanitizeSubmissionPayload(sub, idx));
+  cleanedList.forEach((clean) => {
+    deletedIdsSet.delete(clean.id);
+    submissionsMap.set(clean.id, clean);
+  });
+  emitSubmissions();
+
+  try {
+    await fetch('/api/sync/submissions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ submissions: cleanedList }),
+    });
+  } catch {}
+
+  if (!isFirestoreQuotaExhausted) {
+    try {
+      const batch = writeBatch(db);
+      cleanedList.forEach((clean) => {
+        const docRef = doc(db, SUBMISSIONS_COLLECTION, clean.id);
+        const delRef = doc(db, DELETED_COLLECTION, clean.id);
+        batch.set(docRef, clean);
+        batch.delete(delRef);
+      });
+      await batch.commit();
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, SUBMISSIONS_COLLECTION);
+    }
+  }
+}
+
 export async function deleteSubmissionFromFirebase(submissionId: string): Promise<void> {
-  const subDocRef = doc(db, SUBMISSIONS_COLLECTION, submissionId);
-  const delDocRef = doc(db, DELETED_COLLECTION, submissionId);
-  try {
-    const batch = writeBatch(db);
-    batch.delete(subDocRef);
-    batch.set(delDocRef, {
-      deletedId: submissionId,
-      deletedAt: new Date().toISOString(),
-    });
-    await batch.commit();
-  } catch (error) {
-    handleFirestoreError(error, OperationType.DELETE, `${SUBMISSIONS_COLLECTION}/${submissionId}`);
-  }
-}
+  deletedIdsSet.add(submissionId);
+  submissionsMap.delete(submissionId);
+  emitSubmissions();
 
-/**
- * Clear all submissions in Firestore PERMANENTLY across all devices.
- */
-export async function clearAllSubmissionsFromFirebase(): Promise<void> {
   try {
-    const querySnapshot = await getDocs(collection(db, SUBMISSIONS_COLLECTION));
-    const batch = writeBatch(db);
-    querySnapshot.forEach((docSnap) => {
-      batch.delete(docSnap.ref);
-      const delDocRef = doc(db, DELETED_COLLECTION, docSnap.id);
+    await fetch('/api/sync/submissions/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: [submissionId] }),
+    });
+  } catch {}
+
+  if (!isFirestoreQuotaExhausted) {
+    const subDocRef = doc(db, SUBMISSIONS_COLLECTION, submissionId);
+    const delDocRef = doc(db, DELETED_COLLECTION, submissionId);
+    try {
+      const batch = writeBatch(db);
+      batch.delete(subDocRef);
       batch.set(delDocRef, {
-        deletedId: docSnap.id,
+        deletedId: submissionId,
         deletedAt: new Date().toISOString(),
       });
-    });
-    await batch.commit();
-  } catch (error) {
-    handleFirestoreError(error, OperationType.DELETE, SUBMISSIONS_COLLECTION);
+      await batch.commit();
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `${SUBMISSIONS_COLLECTION}/${submissionId}`);
+    }
   }
 }
 
-/**
- * Real-time subscription to Teacher PIN so changing PIN on one device updates all devices.
- */
+export async function clearAllSubmissionsFromFirebase(): Promise<void> {
+  Array.from(submissionsMap.keys()).forEach((id) => {
+    deletedIdsSet.add(id);
+  });
+  submissionsMap.clear();
+  emitSubmissions();
+
+  try {
+    await fetch('/api/sync/submissions/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clearAll: true }),
+    });
+  } catch {}
+
+  if (!isFirestoreQuotaExhausted) {
+    try {
+      const querySnapshot = await getDocs(collection(db, SUBMISSIONS_COLLECTION));
+      const batch = writeBatch(db);
+      querySnapshot.forEach((docSnap) => {
+        batch.delete(docSnap.ref);
+        const delDocRef = doc(db, DELETED_COLLECTION, docSnap.id);
+        batch.set(delDocRef, {
+          deletedId: docSnap.id,
+          deletedAt: new Date().toISOString(),
+        });
+      });
+      await batch.commit();
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, SUBMISSIONS_COLLECTION);
+    }
+  }
+}
+
 export function subscribeToTeacherPin(
   onPin: (pin: string) => void,
   defaultPin: string = '1234'
@@ -374,164 +698,225 @@ export function subscribeToTeacherPin(
   });
 }
 
-/**
- * Save new teacher PIN to Firestore.
- */
 export async function saveTeacherPinToFirebase(newPin: string): Promise<void> {
-  const docRef = doc(db, SETTINGS_COLLECTION, 'app');
+  const payload = {
+    teacherPin: newPin,
+    updatedAt: new Date().toISOString(),
+  };
+  latestSettingsMap['app'] = payload;
+  emitSettings();
+
   try {
-    await setDoc(docRef, {
-      teacherPin: newPin,
-      updatedAt: new Date().toISOString(),
-    }, { merge: true });
-  } catch (error) {
-    handleFirestoreError(error, OperationType.WRITE, `${SETTINGS_COLLECTION}/app`);
+    await fetch('/api/sync/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ docId: 'app', data: payload }),
+    });
+  } catch {}
+
+  if (!isFirestoreQuotaExhausted) {
+    const docRef = doc(db, SETTINGS_COLLECTION, 'app');
+    try {
+      await setDoc(docRef, payload, { merge: true });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, `${SETTINGS_COLLECTION}/app`);
+    }
   }
 }
 
-/**
- * Real-time subscription to violations for the teacher dashboard.
- */
 export function subscribeToViolations(
   onData: (violations: QuizViolationRecord[]) => void,
-  onError?: (error: Error) => void
+  _onError?: (error: Error) => void
 ): () => void {
-  const q = query(collection(db, VIOLATIONS_COLLECTION));
+  ensureBackendPolling();
+  violationListeners.add(onData);
+  emitViolations();
 
-  return onSnapshot(
-    q,
-    (snapshot) => {
-      const items: QuizViolationRecord[] = [];
-      snapshot.forEach((docSnap) => {
-        const data = docSnap.data();
-        items.push({
-          id: data.id || docSnap.id,
-          studentName: data.studentName || '',
-          studentClass: data.studentClass || '',
-          studentNumber: data.studentNumber || '',
-          questionNumber: typeof data.questionNumber === 'number' ? data.questionNumber : 1,
-          violationCount: typeof data.violationCount === 'number' ? data.violationCount : 1,
-          timestamp: data.timestamp || new Date().toISOString(),
-          unlockToken: data.unlockToken || '',
-          reason: data.reason || 'Terdeteksi membuka tab lain atau meminimalkan browser',
-          status: data.status === 'unlocked' ? 'unlocked' : 'locked',
-          unlockedAt: data.unlockedAt,
-        });
-      });
-      // Sort newest first
-      items.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-      onData(items);
-    },
-    (err) => {
-      console.warn('Violations subscription notice:', err?.message || err);
-      if (onError) onError(err);
+  let firestoreUnsub: (() => void) | null = null;
+  if (!isFirestoreQuotaExhausted) {
+    try {
+      firestoreUnsub = onSnapshot(
+        query(collection(db, VIOLATIONS_COLLECTION)),
+        (snapshot) => {
+          snapshot.forEach((docSnap) => {
+            const data = docSnap.data();
+            const id = data.id || docSnap.id;
+            violationsMap.set(id, {
+              id,
+              studentName: data.studentName || '',
+              studentClass: data.studentClass || '',
+              studentNumber: data.studentNumber || '',
+              questionNumber: typeof data.questionNumber === 'number' ? data.questionNumber : 1,
+              violationCount: typeof data.violationCount === 'number' ? data.violationCount : 1,
+              timestamp: data.timestamp || new Date().toISOString(),
+              unlockToken: data.unlockToken || '',
+              reason: data.reason || 'Terdeteksi membuka tab lain atau meminimalkan browser',
+              status: data.status === 'unlocked' ? 'unlocked' : 'locked',
+              unlockedAt: data.unlockedAt,
+            });
+          });
+          emitViolations();
+        },
+        (err) => {
+          if (isQuotaOrNetworkError(err)) {
+            isFirestoreQuotaExhausted = true;
+          }
+        }
+      );
+    } catch {}
+  }
+
+  return () => {
+    violationListeners.delete(onData);
+    if (firestoreUnsub) {
+      try {
+        firestoreUnsub();
+      } catch {}
     }
-  );
+  };
 }
 
-/**
- * Report a new student violation to Firestore so it immediately notifies teacher dashboards in real-time.
- */
 export async function reportViolationToFirebase(violation: QuizViolationRecord): Promise<void> {
-  const safeId = String(violation.id || `viol-${Date.now()}`).replace(/[^a-zA-Z0-9_\-]/g, '-').slice(0, 120);
-  const docRef = doc(db, VIOLATIONS_COLLECTION, safeId);
+  const safeId = String(violation.id || `viol-${Date.now()}`)
+    .replace(/[^a-zA-Z0-9_\-]/g, '-')
+    .slice(0, 120);
+  const clean: QuizViolationRecord = {
+    id: safeId,
+    studentName: (violation.studentName || 'Siswa').trim().slice(0, 115) || 'Siswa',
+    studentClass: (violation.studentClass || '7A').trim().slice(0, 25) || '7A',
+    studentNumber: (violation.studentNumber || '1').trim().slice(0, 14) || '1',
+    questionNumber: Math.max(1, Number(violation.questionNumber) || 1),
+    violationCount: Math.max(1, Number(violation.violationCount) || 1),
+    timestamp: violation.timestamp || new Date().toISOString(),
+    unlockToken: (violation.unlockToken || '-').slice(0, 25),
+    reason: (violation.reason || 'Terdeteksi membuka tab lain atau meminimalkan browser').slice(
+      0,
+      280
+    ),
+    status: violation.status === 'unlocked' ? 'unlocked' : 'locked',
+  };
+
+  violationsMap.set(safeId, clean);
+  emitViolations();
+
   try {
-    await setDoc(docRef, {
-      id: safeId,
-      studentName: (violation.studentName || 'Siswa').trim().slice(0, 115) || 'Siswa',
-      studentClass: (violation.studentClass || '7A').trim().slice(0, 25) || '7A',
-      studentNumber: (violation.studentNumber || '1').trim().slice(0, 14) || '1',
-      questionNumber: Math.max(1, Number(violation.questionNumber) || 1),
-      violationCount: Math.max(1, Number(violation.violationCount) || 1),
-      timestamp: violation.timestamp || new Date().toISOString(),
-      unlockToken: (violation.unlockToken || '-').slice(0, 25),
-      reason: (violation.reason || 'Terdeteksi membuka tab lain atau meminimalkan browser').slice(0, 280),
-      status: violation.status === 'unlocked' ? 'unlocked' : 'locked',
+    await fetch('/api/sync/violations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ violation: clean }),
     });
-  } catch (error) {
-    handleFirestoreError(error, OperationType.CREATE, `${VIOLATIONS_COLLECTION}/${safeId}`);
+  } catch {}
+
+  if (!isFirestoreQuotaExhausted) {
+    const docRef = doc(db, VIOLATIONS_COLLECTION, safeId);
+    try {
+      await setDoc(docRef, clean);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, `${VIOLATIONS_COLLECTION}/${safeId}`);
+    }
   }
 }
 
-/**
- * Update violation status (e.g. unlocked by student or remotely by teacher).
- */
 export async function updateViolationStatusInFirebase(
-  violationId: string, 
+  violationId: string,
   status: 'locked' | 'unlocked'
 ): Promise<void> {
-  const docRef = doc(db, VIOLATIONS_COLLECTION, violationId);
-  try {
-    await setDoc(
-      docRef,
-      {
-        status,
-        ...(status === 'unlocked' ? { unlockedAt: new Date().toISOString() } : {}),
-      },
-      { merge: true }
-    );
-  } catch (error) {
-    handleFirestoreError(error, OperationType.UPDATE, `${VIOLATIONS_COLLECTION}/${violationId}`);
-  }
-}
-
-/**
- * Delete a single violation log entry from Firestore.
- */
-export async function deleteViolationFromFirebase(violationId: string): Promise<void> {
-  const docRef = doc(db, VIOLATIONS_COLLECTION, violationId);
-  try {
-    await deleteDoc(docRef);
-  } catch (error) {
-    handleFirestoreError(error, OperationType.DELETE, `${VIOLATIONS_COLLECTION}/${violationId}`);
-  }
-}
-
-/**
- * Clear all violation history from Firestore.
- */
-export async function clearAllViolationsFromFirebase(): Promise<void> {
-  try {
-    const snapshot = await getDocs(collection(db, VIOLATIONS_COLLECTION));
-    const batch = writeBatch(db);
-    snapshot.forEach((docSnap) => {
-      batch.delete(docSnap.ref);
+  const unlockedAt = status === 'unlocked' ? new Date().toISOString() : undefined;
+  const existing = violationsMap.get(violationId);
+  if (existing) {
+    violationsMap.set(violationId, {
+      ...existing,
+      status,
+      ...(unlockedAt ? { unlockedAt } : {}),
     });
-    await batch.commit();
-  } catch (error) {
-    handleFirestoreError(error, OperationType.DELETE, VIOLATIONS_COLLECTION);
+    emitViolations();
+  }
+
+  try {
+    await fetch('/api/sync/violations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ updateStatus: { id: violationId, status, unlockedAt } }),
+    });
+  } catch {}
+
+  if (!isFirestoreQuotaExhausted) {
+    const docRef = doc(db, VIOLATIONS_COLLECTION, violationId);
+    try {
+      await setDoc(
+        docRef,
+        {
+          status,
+          ...(unlockedAt ? { unlockedAt } : {}),
+        },
+        { merge: true }
+      );
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `${VIOLATIONS_COLLECTION}/${violationId}`);
+    }
   }
 }
 
-/**
- * Listen to a specific violation's status in real-time (e.g. on student ViolationScreen for remote unlock).
- */
+export async function deleteViolationFromFirebase(violationId: string): Promise<void> {
+  violationsMap.delete(violationId);
+  emitViolations();
+
+  try {
+    await fetch('/api/sync/violations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deleteId: violationId }),
+    });
+  } catch {}
+
+  if (!isFirestoreQuotaExhausted) {
+    const docRef = doc(db, VIOLATIONS_COLLECTION, violationId);
+    try {
+      await deleteDoc(docRef);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `${VIOLATIONS_COLLECTION}/${violationId}`);
+    }
+  }
+}
+
+export async function clearAllViolationsFromFirebase(): Promise<void> {
+  violationsMap.clear();
+  emitViolations();
+
+  try {
+    await fetch('/api/sync/violations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clearAll: true }),
+    });
+  } catch {}
+
+  if (!isFirestoreQuotaExhausted) {
+    try {
+      const snapshot = await getDocs(collection(db, VIOLATIONS_COLLECTION));
+      const batch = writeBatch(db);
+      snapshot.forEach((docSnap) => {
+        batch.delete(docSnap.ref);
+      });
+      await batch.commit();
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, VIOLATIONS_COLLECTION);
+    }
+  }
+}
+
 export function listenToViolationStatus(
   violationId: string,
   onStatusChange: (status: 'locked' | 'unlocked') => void
 ): () => void {
-  const docRef = doc(db, VIOLATIONS_COLLECTION, violationId);
-  return onSnapshot(
-    docRef,
-    (docSnap) => {
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        if (data.status) {
-          onStatusChange(data.status);
-        }
-      }
-    },
-    (err) => {
-      console.warn('Violation status listener notice:', err?.message || err);
+  return subscribeToViolations((list) => {
+    const found = list.find((v) => v.id === violationId);
+    if (found && found.status) {
+      onStatusChange(found.status);
     }
-  );
+  });
 }
 
-const QUESTION_BANK_DOC = 'questionBank';
-
-/**
- * Subscribe to custom question bank synced across teacher and student devices.
- */
 export function subscribeToQuestionBank(
   onData: (questions: Question[] | null) => void,
   _onError?: (error: Error) => void
@@ -545,51 +930,65 @@ export function subscribeToQuestionBank(
           onData(parsed);
           return;
         }
-      } catch (e) {
-        console.warn('Failed to parse synchronized questionBank:', e);
-      }
+      } catch {}
     }
     onData(null);
   });
 }
 
-/**
- * Save updated question bank (from Word import) to Firebase so all devices receive it.
- */
 export async function saveQuestionBankToFirebase(questions: Question[]): Promise<void> {
-  const docRef = doc(db, SETTINGS_COLLECTION, QUESTION_BANK_DOC);
+  const payload = {
+    questionsJson: JSON.stringify(questions),
+    totalQuestions: questions.length,
+    updatedAt: new Date().toISOString(),
+  };
+  latestSettingsMap[QUESTION_BANK_DOC] = payload;
+  emitSettings();
+
   try {
-    await setDoc(
-      docRef,
-      {
-        questionsJson: JSON.stringify(questions),
-        totalQuestions: questions.length,
-        updatedAt: new Date().toISOString()
-      },
-      { merge: true }
-    );
-  } catch (error) {
-    handleFirestoreError(error, OperationType.WRITE, `${SETTINGS_COLLECTION}/${QUESTION_BANK_DOC}`);
+    await fetch('/api/sync/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ docId: QUESTION_BANK_DOC, data: payload }),
+    });
+  } catch {}
+
+  if (!isFirestoreQuotaExhausted) {
+    const docRef = doc(db, SETTINGS_COLLECTION, QUESTION_BANK_DOC);
+    try {
+      await setDoc(docRef, payload, { merge: true });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, `${SETTINGS_COLLECTION}/${QUESTION_BANK_DOC}`);
+    }
   }
 }
 
-/**
- * Reset question bank in Firebase back to default.
- */
 export async function resetQuestionBankInFirebase(): Promise<void> {
-  const docRef = doc(db, SETTINGS_COLLECTION, QUESTION_BANK_DOC);
+  delete latestSettingsMap[QUESTION_BANK_DOC];
+  emitSettings();
+
   try {
-    await deleteDoc(docRef);
-  } catch (error) {
-    handleFirestoreError(error, OperationType.DELETE, `${SETTINGS_COLLECTION}/${QUESTION_BANK_DOC}`);
+    await fetch('/api/sync/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ docId: QUESTION_BANK_DOC, deleteDoc: true }),
+    });
+  } catch {}
+
+  if (!isFirestoreQuotaExhausted) {
+    const docRef = doc(db, SETTINGS_COLLECTION, QUESTION_BANK_DOC);
+    try {
+      await deleteDoc(docRef);
+    } catch (error) {
+      handleFirestoreError(
+        error,
+        OperationType.DELETE,
+        `${SETTINGS_COLLECTION}/${QUESTION_BANK_DOC}`
+      );
+    }
   }
 }
 
-const PROCEDURE_TEXT_DOC = 'procedureText';
-
-/**
- * Subscribe to synchronized Procedure Text material & recipe database.
- */
 export function subscribeToProcedureText(
   onData: (material: ProcedureTextConfig | null) => void,
   _onError?: (error: Error) => void
@@ -603,51 +1002,69 @@ export function subscribeToProcedureText(
           onData(parsed);
           return;
         }
-      } catch (e) {
-        console.warn('Failed to parse synchronized procedureText:', e);
-      }
+      } catch {}
     }
     onData(null);
   });
 }
 
-/**
- * Save updated Procedure Text material & recipes to Firebase Firestore.
- */
 export async function saveProcedureTextToFirebase(config: ProcedureTextConfig): Promise<void> {
-  const docRef = doc(db, SETTINGS_COLLECTION, PROCEDURE_TEXT_DOC);
+  const payload = {
+    procedureTextJson: JSON.stringify(config),
+    totalTexts: config.texts?.length || 0,
+    updatedAt: new Date().toISOString(),
+  };
+  latestSettingsMap[PROCEDURE_TEXT_DOC] = payload;
+  emitSettings();
+
   try {
-    await setDoc(
-      docRef,
-      {
-        procedureTextJson: JSON.stringify(config),
-        totalTexts: config.texts?.length || 0,
-        updatedAt: new Date().toISOString()
-      },
-      { merge: true }
-    );
-  } catch (error) {
-    handleFirestoreError(error, OperationType.WRITE, `${SETTINGS_COLLECTION}/${PROCEDURE_TEXT_DOC}`);
+    await fetch('/api/sync/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ docId: PROCEDURE_TEXT_DOC, data: payload }),
+    });
+  } catch {}
+
+  if (!isFirestoreQuotaExhausted) {
+    const docRef = doc(db, SETTINGS_COLLECTION, PROCEDURE_TEXT_DOC);
+    try {
+      await setDoc(docRef, payload, { merge: true });
+    } catch (error) {
+      handleFirestoreError(
+        error,
+        OperationType.WRITE,
+        `${SETTINGS_COLLECTION}/${PROCEDURE_TEXT_DOC}`
+      );
+    }
   }
 }
 
-/**
- * Reset Procedure Text material in Firebase back to default.
- */
 export async function resetProcedureTextInFirebase(): Promise<void> {
-  const docRef = doc(db, SETTINGS_COLLECTION, PROCEDURE_TEXT_DOC);
+  delete latestSettingsMap[PROCEDURE_TEXT_DOC];
+  emitSettings();
+
   try {
-    await deleteDoc(docRef);
-  } catch (error) {
-    handleFirestoreError(error, OperationType.DELETE, `${SETTINGS_COLLECTION}/${PROCEDURE_TEXT_DOC}`);
+    await fetch('/api/sync/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ docId: PROCEDURE_TEXT_DOC, deleteDoc: true }),
+    });
+  } catch {}
+
+  if (!isFirestoreQuotaExhausted) {
+    const docRef = doc(db, SETTINGS_COLLECTION, PROCEDURE_TEXT_DOC);
+    try {
+      await deleteDoc(docRef);
+    } catch (error) {
+      handleFirestoreError(
+        error,
+        OperationType.DELETE,
+        `${SETTINGS_COLLECTION}/${PROCEDURE_TEXT_DOC}`
+      );
+    }
   }
 }
 
-const STUDENT_RESTRICTIONS_DOC = 'studentRestrictions';
-
-/**
- * Subscribe to synchronized Student Attempt & Quiz Restriction configuration.
- */
 export function subscribeToStudentRestrictions(
   onData: (config: StudentRestrictionConfig | null) => void,
   _onError?: (error: Error) => void
@@ -661,38 +1078,54 @@ export function subscribeToStudentRestrictions(
           onData(parsed);
           return;
         }
-      } catch (e) {
-        console.warn('Failed to parse synchronized studentRestrictions:', e);
-      }
+      } catch {}
     }
     onData(null);
   });
 }
 
-/**
- * Save updated Student Attempt & Quiz Restriction settings to Firebase Firestore.
- */
-export async function saveStudentRestrictionsToFirebase(config: StudentRestrictionConfig): Promise<void> {
-  const docRef = doc(db, SETTINGS_COLLECTION, STUDENT_RESTRICTIONS_DOC);
+export async function saveStudentRestrictionsToFirebase(
+  config: StudentRestrictionConfig
+): Promise<void> {
+  const normalizedConfig: StudentRestrictionConfig = {
+    ...config,
+    registeredStudents: Array.isArray(config.registeredStudents)
+      ? config.registeredStudents.map((r) => ({
+          ...r,
+          studentClass: normalizeClassKey(r.studentClass),
+        }))
+      : config.registeredStudents,
+    updatedAt: new Date().toISOString(),
+  };
+  const payload = {
+    restrictionsJson: JSON.stringify(normalizedConfig),
+    updatedAt: normalizedConfig.updatedAt,
+  };
+  latestSettingsMap[STUDENT_RESTRICTIONS_DOC] = payload;
+  emitSettings();
+
   try {
-    await setDoc(
-      docRef,
-      {
-        restrictionsJson: JSON.stringify(config),
-        updatedAt: new Date().toISOString(),
-      },
-      { merge: true }
-    );
-  } catch (error) {
-    handleFirestoreError(error, OperationType.WRITE, `${SETTINGS_COLLECTION}/${STUDENT_RESTRICTIONS_DOC}`);
+    await fetch('/api/sync/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ docId: STUDENT_RESTRICTIONS_DOC, data: payload }),
+    });
+  } catch {}
+
+  if (!isFirestoreQuotaExhausted) {
+    const docRef = doc(db, SETTINGS_COLLECTION, STUDENT_RESTRICTIONS_DOC);
+    try {
+      await setDoc(docRef, payload, { merge: true });
+    } catch (error) {
+      handleFirestoreError(
+        error,
+        OperationType.WRITE,
+        `${SETTINGS_COLLECTION}/${STUDENT_RESTRICTIONS_DOC}`
+      );
+    }
   }
 }
 
-const DASHBOARD_BACKGROUND_DOC = 'dashboardBackground';
-
-/**
- * Subscribe to synchronized Dashboard Background configuration.
- */
 export function subscribeToDashboardBackground(
   onData: (config: DashboardBackgroundConfig | null) => void,
   _onError?: (error: Error) => void
@@ -706,49 +1139,57 @@ export function subscribeToDashboardBackground(
           onData(parsed);
           return;
         }
-      } catch (e) {
-        console.warn('Failed to parse synchronized dashboardBackground:', e);
-      }
+      } catch {}
     }
     onData(null);
   });
 }
 
-/**
- * Save updated Dashboard Background settings to Firebase Firestore (truncating history if needed to stay under 900KB).
- */
-export async function saveDashboardBackgroundToFirebase(config: DashboardBackgroundConfig): Promise<void> {
-  const docRef = doc(db, SETTINGS_COLLECTION, DASHBOARD_BACKGROUND_DOC);
-  try {
-    let payloadConfig = { ...config };
-    let serialized = JSON.stringify(payloadConfig);
-    if (serialized.length > 850000 && Array.isArray(payloadConfig.savedCustomImages)) {
-      payloadConfig = {
-        ...payloadConfig,
-        savedCustomImages: payloadConfig.savedCustomImages.slice(0, 2),
-      };
-      serialized = JSON.stringify(payloadConfig);
-    }
-    if (serialized.length > 850000) {
-      payloadConfig = {
-        ...payloadConfig,
-        savedCustomImages: [],
-      };
-      serialized = JSON.stringify(payloadConfig);
-    }
+export async function saveDashboardBackgroundToFirebase(
+  config: DashboardBackgroundConfig
+): Promise<void> {
+  let payloadConfig = { ...config };
+  let serialized = JSON.stringify(payloadConfig);
+  if (serialized.length > 850000 && Array.isArray(payloadConfig.savedCustomImages)) {
+    payloadConfig = {
+      ...payloadConfig,
+      savedCustomImages: payloadConfig.savedCustomImages.slice(0, 2),
+    };
+    serialized = JSON.stringify(payloadConfig);
+  }
+  if (serialized.length > 850000) {
+    payloadConfig = {
+      ...payloadConfig,
+      savedCustomImages: [],
+    };
+    serialized = JSON.stringify(payloadConfig);
+  }
 
-    await setDoc(
-      docRef,
-      {
-        backgroundJson: serialized,
-        updatedAt: new Date().toISOString(),
-      },
-      { merge: true }
-    );
-  } catch (error) {
-    handleFirestoreError(error, OperationType.WRITE, `${SETTINGS_COLLECTION}/${DASHBOARD_BACKGROUND_DOC}`);
+  const payload = {
+    backgroundJson: serialized,
+    updatedAt: new Date().toISOString(),
+  };
+  latestSettingsMap[DASHBOARD_BACKGROUND_DOC] = payload;
+  emitSettings();
+
+  try {
+    await fetch('/api/sync/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ docId: DASHBOARD_BACKGROUND_DOC, data: payload }),
+    });
+  } catch {}
+
+  if (!isFirestoreQuotaExhausted) {
+    const docRef = doc(db, SETTINGS_COLLECTION, DASHBOARD_BACKGROUND_DOC);
+    try {
+      await setDoc(docRef, payload, { merge: true });
+    } catch (error) {
+      handleFirestoreError(
+        error,
+        OperationType.WRITE,
+        `${SETTINGS_COLLECTION}/${DASHBOARD_BACKGROUND_DOC}`
+      );
+    }
   }
 }
-
-
-

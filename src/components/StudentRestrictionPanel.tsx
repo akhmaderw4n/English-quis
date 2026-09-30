@@ -34,6 +34,7 @@ import {
   normalizeStudentNumber,
   detectCrossClassDuplicateSubmissions,
   hasStudentSubmittedQuiz,
+  parseSmartStudentLines,
 } from '../data/quizData';
 import { playClickSound } from '../utils/audio';
 
@@ -62,11 +63,11 @@ export const StudentRestrictionPanel: React.FC<StudentRestrictionPanelProps> = (
   // State for Database Siswa / Guru management
   const [dbClassFilter, setDbClassFilter] = useState<string>('ALL');
   const [newRegName, setNewRegName] = useState('');
-  const [newRegClass, setNewRegClass] = useState('7A');
+  const [newRegClass, setNewRegClass] = useState('7G');
   const [newRegNumber, setNewRegNumber] = useState('');
   const [dbErrorMsg, setDbErrorMsg] = useState<string | null>(null);
   const [bulkPasteMode, setBulkPasteMode] = useState(false);
-  const [bulkPasteClass, setBulkPasteClass] = useState('7A');
+  const [bulkPasteClass, setBulkPasteClass] = useState('7G');
   const [bulkPasteText, setBulkPasteText] = useState('');
 
   const registeredStudents = React.useMemo(
@@ -331,7 +332,7 @@ export const StudentRestrictionPanel: React.FC<StudentRestrictionPanelProps> = (
     e.preventDefault();
     playClickSound();
     const cleanName = normalizeStudentName(newRegName);
-    const cleanClass = newRegClass.trim().toUpperCase();
+    const cleanClass = normalizeStudentClass(newRegClass) || '7G';
     const cleanNum = normalizeStudentNumber(newRegNumber) || '1';
 
     if (!cleanName) {
@@ -339,21 +340,15 @@ export const StudentRestrictionPanel: React.FC<StudentRestrictionPanelProps> = (
       return;
     }
 
-    // Check if name already exists in another class in registeredStudents
-    const existingByName = registeredStudents.find(
-      (r) => normalizeStudentName(r.name) === cleanName
-    );
-    if (existingByName && existingByName.studentClass.toUpperCase() !== cleanClass) {
-      setDbErrorMsg(
-        `DITOLAK: Nama "${newRegName.trim()}" sudah terdata di Kelas ${existingByName.studentClass} (Absen ${existingByName.studentNumber}). Satu nama siswa tidak boleh terdaftar di 2 kelas berbeda! Hapus data lama jika ingin memindahkan kelas.`
-      );
-      return;
-    }
-
     setDbErrorMsg(null);
-    const updatedList = existingByName
+    const existingInSameClass = registeredStudents.find(
+      (r) =>
+        normalizeStudentName(r.name) === cleanName &&
+        normalizeStudentClass(r.studentClass) === cleanClass
+    );
+    const updatedList = existingInSameClass
       ? registeredStudents.map((r) =>
-          r.id === existingByName.id
+          r.id === existingInSameClass.id
             ? { ...r, name: newRegName.trim(), studentClass: cleanClass, studentNumber: cleanNum }
             : r
         )
@@ -374,7 +369,7 @@ export const StudentRestrictionPanel: React.FC<StudentRestrictionPanelProps> = (
     });
     setNewRegName('');
     setNewRegNumber(String((parseInt(cleanNum, 10) || 1) + 1));
-    showToast(`Siswa "${newRegName.trim()}" (Kelas ${cleanClass} • Absen ${cleanNum}) disimpan ke Database Siswa/Guru`);
+    showToast(`Siswa "${newRegName.trim()}" (Kelas ${cleanClass} • Absen ${cleanNum}) disimpan ke Database Siswa & Rekap Guru`);
   };
 
   const handleDeleteRegisteredStudent = (id: string, name: string, cls: string) => {
@@ -390,9 +385,13 @@ export const StudentRestrictionPanel: React.FC<StudentRestrictionPanelProps> = (
 
   const handleSyncDatabaseFromSubmissions = () => {
     playClickSound();
-    const mapByName = new Map<string, RegisteredStudent>();
+    const mapByKey = new Map<string, RegisteredStudent>();
     registeredStudents.forEach((r) => {
-      mapByName.set(normalizeStudentName(r.name), r);
+      const k = `${normalizeStudentClass(r.studentClass)}__${normalizeStudentName(r.name)}`;
+      mapByKey.set(k, {
+        ...r,
+        studentClass: normalizeStudentClass(r.studentClass) || '7A',
+      });
     });
 
     // Sort oldest submissions first so earliest class is authoritative
@@ -403,19 +402,21 @@ export const StudentRestrictionPanel: React.FC<StudentRestrictionPanelProps> = (
     let addedCount = 0;
     sortedSubs.forEach((sub) => {
       const norm = normalizeStudentName(sub.studentName);
+      const cls = normalizeStudentClass(sub.studentClass) || '7A';
       if (!norm) return;
-      if (!mapByName.has(norm)) {
-        mapByName.set(norm, {
+      const k = `${cls}__${norm}`;
+      if (!mapByKey.has(k)) {
+        mapByKey.set(k, {
           id: `reg-sync-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
           name: sub.studentName.trim(),
-          studentClass: (sub.studentClass || '7A').trim().toUpperCase(),
+          studentClass: cls,
           studentNumber: normalizeStudentNumber(sub.studentNumber) || '1',
         });
         addedCount += 1;
       }
     });
 
-    const nextList = Array.from(mapByName.values());
+    const nextList = Array.from(mapByKey.values());
     onUpdateConfig({
       ...config,
       registeredStudents: nextList,
@@ -430,63 +431,48 @@ export const StudentRestrictionPanel: React.FC<StudentRestrictionPanelProps> = (
 
   const handleSaveBulkPasteRoster = () => {
     playClickSound();
-    const lines = bulkPasteText
-      .split(/\r?\n/)
-      .map((l) => l.trim())
-      .filter(Boolean);
-    if (lines.length === 0) {
+    const parsedRows = parseSmartStudentLines(bulkPasteText, bulkPasteClass);
+    if (parsedRows.length === 0) {
       setDbErrorMsg('Tempel minimal 1 baris nama siswa terlebih dahulu.');
       return;
     }
 
-    const mapByName = new Map<string, RegisteredStudent>();
+    const mapByKey = new Map<string, RegisteredStudent>();
     registeredStudents.forEach((r) => {
-      mapByName.set(normalizeStudentName(r.name), r);
+      const k = `${normalizeStudentClass(r.studentClass)}__${normalizeStudentName(r.name)}`;
+      mapByKey.set(k, {
+        ...r,
+        studentClass: normalizeStudentClass(r.studentClass) || '7A',
+      });
     });
 
     let added = 0;
-    let skippedConflict = 0;
-
-    lines.forEach((line, idx) => {
-      // Support formats like "12. Galang Pratama", "12, Galang Pratama", "12 - Galang Pratama", "12\tGalang Pratama", or "Galang Pratama"
-      const match = line.match(/^(\d{1,3})[\.\,\;\)\-\s\t]+(.+)$/);
-      const numStr = match ? normalizeStudentNumber(match[1]) : String(idx + 1);
-      // Also strip any trailing score column like ", 80" if pasted from Excel
-      const rawName = (match ? match[2] : line)
-        .replace(/[\,\;\t]+\s*\d{1,3}\s*$/, '')
-        .trim();
-      const norm = normalizeStudentName(rawName);
+    parsedRows.forEach((row, idx) => {
+      const norm = normalizeStudentName(row.studentName);
       if (!norm) return;
+      const targetClassNorm = normalizeStudentClass(row.studentClass || bulkPasteClass) || '7G';
+      const key = `${targetClassNorm}__${norm}`;
+      const existing = mapByKey.get(key);
 
-      const targetClassNorm = normalizeStudentClass(bulkPasteClass);
-      const existing = mapByName.get(norm);
-      if (existing && normalizeStudentClass(existing.studentClass) !== targetClassNorm) {
-        // Skip because already registered in another class!
-        skippedConflict += 1;
-        return;
-      }
-
-      mapByName.set(norm, {
+      mapByKey.set(key, {
         id: existing?.id || `reg-bulk-${Date.now()}-${idx}`,
-        name: rawName,
+        name: row.studentName,
         studentClass: targetClassNorm,
-        studentNumber: numStr,
+        studentNumber: normalizeStudentNumber(row.studentNumber) || String(idx + 1),
       });
       added += 1;
     });
 
     onUpdateConfig({
       ...config,
-      registeredStudents: Array.from(mapByName.values()),
+      registeredStudents: Array.from(mapByKey.values()),
       updatedAt: new Date().toISOString(),
     });
     setBulkPasteText('');
     setBulkPasteMode(false);
     setDbErrorMsg(null);
     showToast(
-      `Berhasil menyimpan ${added} siswa Kelas ${bulkPasteClass} ke Database${
-        skippedConflict > 0 ? ` (${skippedConflict} nama ditolak karena sudah terdaftar di kelas lain)` : ''
-      }`
+      `Berhasil menyimpan ${added} siswa Kelas ${bulkPasteClass} ke Database Siswa & Rekap Nilai Guru!`
     );
   };
 

@@ -50,44 +50,101 @@ export const StartScreen: React.FC<StartScreenProps> = ({
   submissions = [],
 }) => {
   const [name, setName] = useState('');
-  const [studentClass, setStudentClass] = useState('7A');
+  const [studentClass, setStudentClass] = useState('7G');
   const [studentNumber, setStudentNumber] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
+  const [hasUserChangedClass, setHasUserChangedClass] = useState(false);
 
   // Combine registeredStudents and teacher-input submissions so students from 7G/7H are recognized automatically
   const allKnownRoster = React.useMemo(() => {
     const map = new Map<string, { id: string; name: string; studentClass: string; studentNumber: string }>();
     (restrictions.registeredStudents || []).forEach((r) => {
       const n = normalizeStudentName(r.name);
-      if (n && !map.has(n)) {
-        map.set(n, {
+      const cls = normalizeStudentClass(r.studentClass) || '7A';
+      const key = `${cls}__${n}`;
+      if (n && !map.has(key)) {
+        map.set(key, {
           id: r.id,
           name: r.name.replace(/^\d{1,3}[\.\,\;\-\)\s\t]+/, '').trim(),
-          studentClass: normalizeStudentClass(r.studentClass) || '7A',
-          studentNumber: normalizeStudentNumber(r.studentNumber),
+          studentClass: cls,
+          studentNumber: normalizeStudentNumber(r.studentNumber) || '1',
         });
       }
     });
     submissions.forEach((s) => {
       const n = normalizeStudentName(s.studentName);
-      if (n && !map.has(n)) {
-        map.set(n, {
+      const cls = normalizeStudentClass(s.studentClass) || '7A';
+      const key = `${cls}__${n}`;
+      if (n && !map.has(key)) {
+        map.set(key, {
           id: s.id,
           name: s.studentName.replace(/^\d{1,3}[\.\,\;\-\)\s\t]+/, '').trim(),
-          studentClass: normalizeStudentClass(s.studentClass) || '7A',
-          studentNumber: normalizeStudentNumber(s.studentNumber),
+          studentClass: cls,
+          studentNumber: normalizeStudentNumber(s.studentNumber) || '1',
         });
       }
     });
-    return Array.from(map.values());
+    const list = Array.from(map.values());
+    list.sort((a, b) => {
+      const clsCmp = a.studentClass.localeCompare(b.studentClass);
+      if (clsCmp !== 0) return clsCmp;
+      const numA = parseInt(a.studentNumber, 10) || 999;
+      const numB = parseInt(b.studentNumber, 10) || 999;
+      if (numA !== numB) return numA - numB;
+      return a.name.localeCompare(b.name);
+    });
+    return list;
   }, [restrictions.registeredStudents, submissions]);
+
+  const classCounts = React.useMemo(() => {
+    const counts: Record<string, number> = {};
+    allKnownRoster.forEach((r) => {
+      const c = normalizeStudentClass(r.studentClass) || '7A';
+      counts[c] = (counts[c] || 0) + 1;
+    });
+    return counts;
+  }, [allKnownRoster]);
+
+  // Auto-select 7G (or the first custom-inputted class) when roster data loads if user hasn't manually changed class
+  React.useEffect(() => {
+    if (hasUserChangedClass || name.trim()) return;
+    if ((classCounts['7G'] || 0) > 0) {
+      setStudentClass('7G');
+      return;
+    }
+    const nonDefaultRoster = allKnownRoster.filter((r) => !/^reg-[1-5]$/.test(r.id) && !/^sub-[1-5]$/.test(r.id));
+    if (nonDefaultRoster.length > 0) {
+      setStudentClass(nonDefaultRoster[0].studentClass);
+    }
+  }, [allKnownRoster, classCounts, hasUserChangedClass, name]);
+
+  // Registered students strictly in the currently selected class
+  const studentsInSelectedClass = React.useMemo(() => {
+    const cleanSelectedClass = normalizeStudentClass(studentClass);
+    return allKnownRoster.filter(
+      (r) => normalizeStudentClass(r.studentClass) === cleanSelectedClass
+    );
+  }, [allKnownRoster, studentClass]);
+
+  // Registered students in the currently selected class (or all classes) for quick autocomplete
+  const classRegisteredStudents = React.useMemo(() => {
+    return studentsInSelectedClass.length > 0 ? studentsInSelectedClass : allKnownRoster;
+  }, [studentsInSelectedClass, allKnownRoster]);
 
   const handleNameChange = (val: string) => {
     setName(val);
     setErrorMsg('');
 
     const normVal = normalizeStudentName(val);
-    const matched = normVal ? allKnownRoster.find((r) => normalizeStudentName(r.name) === normVal) : undefined;
+    const cleanSelectedClass = normalizeStudentClass(studentClass);
+    // Prefer matching in currently selected class first
+    const matched = normVal
+      ? allKnownRoster.find(
+          (r) =>
+            normalizeStudentName(r.name) === normVal &&
+            normalizeStudentClass(r.studentClass) === cleanSelectedClass
+        ) || allKnownRoster.find((r) => normalizeStudentName(r.name) === normVal)
+      : undefined;
 
     const nextClass = matched?.studentClass || studentClass;
     const nextNum = matched?.studentNumber || studentNumber;
@@ -95,7 +152,7 @@ export const StartScreen: React.FC<StartScreenProps> = ({
     if (matched?.studentClass && matched.studentClass !== studentClass) {
       setStudentClass(matched.studentClass);
     }
-    if (matched?.studentNumber && !studentNumber) {
+    if (matched?.studentNumber) {
       setStudentNumber(matched.studentNumber);
     }
 
@@ -103,6 +160,7 @@ export const StartScreen: React.FC<StartScreenProps> = ({
   };
 
   const handleClassChange = (val: string) => {
+    setHasUserChangedClass(true);
     setStudentClass(val);
     setErrorMsg('');
     onStudentDraftChange?.({ name, studentClass: val, studentNumber });
@@ -119,15 +177,6 @@ export const StartScreen: React.FC<StartScreenProps> = ({
     submissions,
     restrictions
   );
-
-  // Registered students in the currently selected class (or all classes) for quick autocomplete
-  const classRegisteredStudents = React.useMemo(() => {
-    const cleanSelectedClass = normalizeStudentClass(studentClass);
-    const inClass = allKnownRoster.filter(
-      (r) => normalizeStudentClass(r.studentClass) === cleanSelectedClass
-    );
-    return inClass.length > 0 ? inClass : allKnownRoster;
-  }, [allKnownRoster, studentClass]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -338,6 +387,89 @@ export const StartScreen: React.FC<StartScreenProps> = ({
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
+          {/* Class Selection Dropdown */}
+          <div>
+            <div className="flex items-center justify-between gap-2 mb-1.5">
+              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                Pilih Kelas <span className="text-rose-500">*</span>
+              </label>
+              {studentsInSelectedClass.length > 0 && (
+                <span className="text-[11px] font-bold text-amber-800 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200">
+                  {studentsInSelectedClass.length} Siswa Terdata di Kelas {studentClass}
+                </span>
+              )}
+            </div>
+            <div className="relative">
+              <select
+                required
+                value={studentClass}
+                onChange={(e) => {
+                  playClickSound();
+                  handleClassChange(e.target.value);
+                }}
+                className={`w-full pl-10 pr-10 py-3 sm:py-2.5 rounded-xl border outline-hidden text-base sm:text-sm text-slate-800 transition-all font-medium bg-white appearance-none cursor-pointer ${
+                  attemptStatus.isCrossClassConflict
+                    ? 'border-rose-400 bg-rose-50/40 focus:border-rose-500 focus:ring-2 focus:ring-rose-200'
+                    : 'border-slate-300 focus:border-amber-500 focus:ring-2 focus:ring-amber-200'
+                }`}
+              >
+                <option value="" disabled>-- Pilih Kelas Anda --</option>
+                {['7A', '7B', '7C', '7D', '7E', '7F', '7G', '7H'].map((cls) => (
+                  <option key={cls} value={cls}>
+                    Kelas {cls}
+                    {classCounts[cls] ? ` (${classCounts[cls]} Siswa Terdata)` : ''}
+                  </option>
+                ))}
+              </select>
+              <School className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5 sm:top-3 pointer-events-none" />
+              <ChevronDown className="w-4 h-4 text-slate-400 absolute right-3.5 top-3.5 sm:top-3 pointer-events-none" />
+            </div>
+          </div>
+
+          {/* Visible Student Roster Quick-Select Dropdown for Selected Class */}
+          {studentsInSelectedClass.length > 0 && (
+            <div className="p-3 rounded-xl bg-amber-50/70 border border-amber-200/90 space-y-1.5">
+              <label className="block text-[11px] font-bold text-amber-950 uppercase tracking-wider">
+                Pilih Nama dari Daftar Siswa Kelas {studentClass} ({studentsInSelectedClass.length} Siswa):
+              </label>
+              <div className="relative">
+                <select
+                  value={
+                    studentsInSelectedClass.find(
+                      (s) => normalizeStudentName(s.name) === normalizeStudentName(name)
+                    )?.name || ''
+                  }
+                  onChange={(e) => {
+                    playClickSound();
+                    const chosenName = e.target.value;
+                    if (!chosenName) return;
+                    const matched = studentsInSelectedClass.find((s) => s.name === chosenName);
+                    setName(chosenName);
+                    setErrorMsg('');
+                    const nextNum = matched?.studentNumber || studentNumber;
+                    if (matched?.studentNumber) {
+                      setStudentNumber(matched.studentNumber);
+                    }
+                    onStudentDraftChange?.({
+                      name: chosenName,
+                      studentClass,
+                      studentNumber: nextNum,
+                    });
+                  }}
+                  className="w-full pl-3.5 pr-9 py-2.5 rounded-xl border border-amber-300 bg-white text-xs sm:text-sm font-bold text-slate-800 outline-hidden focus:border-amber-500 appearance-none cursor-pointer"
+                >
+                  <option value="">-- Klik untuk Pilih Nama Siswa Kelas {studentClass} --</option>
+                  {studentsInSelectedClass.map((st) => (
+                    <option key={st.id} value={st.name}>
+                      No. {st.studentNumber.padStart(2, '0')} - {st.name} (Kelas {st.studentClass})
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown className="w-4 h-4 text-amber-700 absolute right-3 top-3 pointer-events-none" />
+              </div>
+            </div>
+          )}
+
           {/* Student Name */}
           <div>
             <div className="flex items-center justify-between gap-2 mb-1.5">
@@ -364,11 +496,11 @@ export const StartScreen: React.FC<StartScreenProps> = ({
                   const matched = classRegisteredStudents.find(
                     (r) => r.name.trim().toLowerCase() === val.trim().toLowerCase()
                   );
-                  if (matched && matched.studentNumber && !studentNumber) {
+                  if (matched && matched.studentNumber) {
                     handleNumberChange(matched.studentNumber);
                   }
                 }}
-                placeholder="Contoh: Galang Pratama"
+                placeholder="Ketik atau pilih nama lengkap siswa..."
                 className={`w-full pl-10 pr-4 py-3 sm:py-2.5 rounded-xl border outline-hidden text-base sm:text-sm text-slate-800 transition-all font-medium ${
                   attemptStatus.isDatabaseRejected
                     ? 'border-rose-400 bg-rose-50/40 focus:border-rose-500 focus:ring-2 focus:ring-rose-200'
@@ -383,40 +515,6 @@ export const StartScreen: React.FC<StartScreenProps> = ({
                   </option>
                 ))}
               </datalist>
-            </div>
-          </div>
-
-          {/* Class Selection Dropdown */}
-          <div>
-            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-              Pilih Kelas <span className="text-rose-500">*</span>
-            </label>
-            <div className="relative">
-              <select
-                required
-                value={studentClass}
-                onChange={(e) => {
-                  playClickSound();
-                  handleClassChange(e.target.value);
-                }}
-                className={`w-full pl-10 pr-10 py-3 sm:py-2.5 rounded-xl border outline-hidden text-base sm:text-sm text-slate-800 transition-all font-medium bg-white appearance-none cursor-pointer ${
-                  attemptStatus.isCrossClassConflict
-                    ? 'border-rose-400 bg-rose-50/40 focus:border-rose-500 focus:ring-2 focus:ring-rose-200'
-                    : 'border-slate-300 focus:border-amber-500 focus:ring-2 focus:ring-amber-200'
-                }`}
-              >
-                <option value="" disabled>-- Pilih Kelas Anda --</option>
-                <option value="7A">Kelas 7A</option>
-                <option value="7B">Kelas 7B</option>
-                <option value="7C">Kelas 7C</option>
-                <option value="7D">Kelas 7D</option>
-                <option value="7E">Kelas 7E</option>
-                <option value="7F">Kelas 7F</option>
-                <option value="7G">Kelas 7G</option>
-                <option value="7H">Kelas 7H</option>
-              </select>
-              <School className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5 sm:top-3 pointer-events-none" />
-              <ChevronDown className="w-4 h-4 text-slate-400 absolute right-3.5 top-3.5 sm:top-3 pointer-events-none" />
             </div>
           </div>
 

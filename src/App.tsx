@@ -805,38 +805,68 @@ export default function App() {
 
   // Add new submission manually by teacher
   const handleAddSubmission = async (newSub: QuizSubmission) => {
-    const statusCheck = getStudentAttemptStatus(
-      { name: newSub.studentName, studentClass: newSub.studentClass, studentNumber: newSub.studentNumber },
-      submissions,
-      studentRestrictions
-    );
-    if (statusCheck.isCrossClassConflict) {
-      return;
-    }
+    const cleanClass = normalizeStudentClass(newSub.studentClass) || '7A';
+    const cleanNum = (normalizeStudentNumber(newSub.studentNumber) || '1').padStart(2, '0');
+    const cleanName = newSub.studentName.trim();
+    const normalizedSub: QuizSubmission = {
+      ...newSub,
+      studentName: cleanName,
+      studentClass: cleanClass,
+      studentNumber: cleanNum,
+    };
 
-    setSubmissions(prev => [newSub, ...prev.filter(s => s.id !== newSub.id)]);
+    const normName = normalizeStudentName(cleanName);
 
-    // Register into Database Siswa/Guru if not already present
+    setSubmissions(prev => {
+      // Replace any previous unsubmitted placeholder for the same student in the same class
+      const filtered = prev.filter(s => {
+        if (s.id === normalizedSub.id) return false;
+        const samePersonInClass =
+          normalizeStudentClass(s.studentClass) === cleanClass &&
+          normalizeStudentName(s.studentName) === normName &&
+          isTeacherManualRosterSubmission(s);
+        return !samePersonInClass;
+      });
+      const next = [normalizedSub, ...filtered];
+      try {
+        localStorage.setItem(STORAGE_KEY_SUBMISSIONS, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+
+    // Register or update in Database Siswa/Guru
     const currentRoster = studentRestrictions.registeredStudents ?? INITIAL_REGISTERED_STUDENTS;
-    const normName = normalizeStudentName(newSub.studentName);
-    if (normName && !currentRoster.some(r => normalizeStudentName(r.name) === normName)) {
+    if (normName) {
+      const existingIdx = currentRoster.findIndex(
+        r =>
+          normalizeStudentName(r.name) === normName &&
+          normalizeStudentClass(r.studentClass) === cleanClass
+      );
+      let nextRoster = [...currentRoster];
+      if (existingIdx >= 0) {
+        nextRoster[existingIdx] = {
+          ...nextRoster[existingIdx],
+          name: cleanName,
+          studentClass: cleanClass,
+          studentNumber: normalizeStudentNumber(cleanNum) || '1',
+        };
+      } else {
+        nextRoster.push({
+          id: `reg-t-${Date.now()}`,
+          name: cleanName,
+          studentClass: cleanClass,
+          studentNumber: normalizeStudentNumber(cleanNum) || '1',
+        });
+      }
       handleUpdateStudentRestrictions({
         ...studentRestrictions,
-        registeredStudents: [
-          ...currentRoster,
-          {
-            id: `reg-t-${Date.now()}`,
-            name: newSub.studentName.trim(),
-            studentClass: newSub.studentClass.trim().toUpperCase(),
-            studentNumber: normalizeStudentNumber(newSub.studentNumber) || '1',
-          },
-        ],
+        registeredStudents: nextRoster,
         updatedAt: new Date().toISOString(),
       });
     }
 
     try {
-      await saveSubmissionToFirebase(newSub);
+      await saveSubmissionToFirebase(normalizedSub);
     } catch (err) {
       console.error('Error adding submission to Firebase:', err);
     }
@@ -844,44 +874,70 @@ export default function App() {
 
   // Add multiple submissions manually by teacher
   const handleAddBatchSubmissions = async (newSubs: QuizSubmission[]) => {
-    const validSubs = newSubs.filter(sub => {
-      const check = getStudentAttemptStatus(
-        { name: sub.studentName, studentClass: sub.studentClass, studentNumber: sub.studentNumber },
-        submissions,
-        studentRestrictions
-      );
-      return !check.isCrossClassConflict;
-    });
-    if (validSubs.length === 0) return;
+    if (!Array.isArray(newSubs) || newSubs.length === 0) return;
 
-    setSubmissions(prev => [...validSubs, ...prev]);
+    const normalizedBatch: QuizSubmission[] = newSubs
+      .filter(sub => sub && sub.studentName && sub.studentName.trim().length > 0)
+      .map((sub, idx) => ({
+        ...sub,
+        studentName: sub.studentName.trim(),
+        studentClass: normalizeStudentClass(sub.studentClass) || '7A',
+        studentNumber: (normalizeStudentNumber(sub.studentNumber) || String(idx + 1)).padStart(2, '0'),
+      }));
 
-    // Also sync these students into Database Siswa/Guru (registeredStudents)
-    const currentRoster = studentRestrictions.registeredStudents ?? INITIAL_REGISTERED_STUDENTS;
-    const rosterMap = new Map(currentRoster.map(r => [normalizeStudentName(r.name), r]));
-    let rosterChanged = false;
-    validSubs.forEach((sub, idx) => {
-      const norm = normalizeStudentName(sub.studentName);
-      if (norm && !rosterMap.has(norm)) {
-        rosterMap.set(norm, {
-          id: `reg-batch-${Date.now()}-${idx}`,
-          name: sub.studentName.trim(),
-          studentClass: normalizeStudentClass(sub.studentClass) || '7A',
-          studentNumber: normalizeStudentNumber(sub.studentNumber) || String(idx + 1),
-        });
-        rosterChanged = true;
-      }
-    });
-    if (rosterChanged) {
-      handleUpdateStudentRestrictions({
-        ...studentRestrictions,
-        registeredStudents: Array.from(rosterMap.values()),
-        updatedAt: new Date().toISOString(),
+    if (normalizedBatch.length === 0) return;
+
+    const incomingKeys = new Set(
+      normalizedBatch.map(
+        s => `${normalizeStudentClass(s.studentClass)}__${normalizeStudentName(s.studentName)}`
+      )
+    );
+
+    setSubmissions(prev => {
+      const filtered = prev.filter(s => {
+        const key = `${normalizeStudentClass(s.studentClass)}__${normalizeStudentName(s.studentName)}`;
+        if (incomingKeys.has(key) && isTeacherManualRosterSubmission(s)) {
+          return false;
+        }
+        return true;
       });
-    }
+      const next = [...normalizedBatch, ...filtered];
+      try {
+        localStorage.setItem(STORAGE_KEY_SUBMISSIONS, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+
+    // Also sync these students into Database Siswa/Guru (registeredStudents) keyed by class + name
+    const currentRoster = studentRestrictions.registeredStudents ?? INITIAL_REGISTERED_STUDENTS;
+    const rosterMap = new Map(
+      currentRoster.map(r => [
+        `${normalizeStudentClass(r.studentClass)}__${normalizeStudentName(r.name)}`,
+        r,
+      ])
+    );
+    normalizedBatch.forEach((sub, idx) => {
+      const norm = normalizeStudentName(sub.studentName);
+      const cls = normalizeStudentClass(sub.studentClass) || '7A';
+      if (!norm) return;
+      const key = `${cls}__${norm}`;
+      const existing = rosterMap.get(key);
+      rosterMap.set(key, {
+        id: existing?.id || `reg-batch-${Date.now()}-${idx}`,
+        name: sub.studentName.trim(),
+        studentClass: cls,
+        studentNumber: normalizeStudentNumber(sub.studentNumber) || String(idx + 1),
+      });
+    });
+
+    handleUpdateStudentRestrictions({
+      ...studentRestrictions,
+      registeredStudents: Array.from(rosterMap.values()),
+      updatedAt: new Date().toISOString(),
+    });
 
     try {
-      await saveBatchSubmissionsToFirebase(validSubs);
+      await saveBatchSubmissionsToFirebase(normalizedBatch);
     } catch (err) {
       console.error('Error adding batch submissions to Firebase:', err);
     }
